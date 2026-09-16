@@ -1,0 +1,254 @@
+/**
+ * Pure Minds — designsysteem voor interne tools
+ *
+ * Alle herbruikbare bouwstenen staan hier: achtergrond, kaarten, knoppen,
+ * invoervelden, voortgang, labels, scoretegels, tabellen en skeletons.
+ * Toolspecifieke opmaak hoort in de pagina zelf, niet in dit bestand.
+ *
+ * De kleuren komen van pureminds.nl en staan óók als Tailwind-tokens in
+ * index.html (pm-cyan, pm-blue, pm-magenta, ...). Wijzig je een kleur hier,
+ * wijzig hem daar dan mee.
+ */
+
+:root {
+  --pm-cyan: #1ab9e2;
+  --pm-tint: #e8f7fc;
+  --pm-soft: #f2fbfe;
+  --pm-blue: #1b71a8;
+  --pm-deep: #005aaf;
+  --pm-magenta: #b61b50;
+  --pm-magenta-dark: #9c1644;
+  --pm-green: #009670;
+  --pm-ink: #303030;
+  --pm-muted: #5c6670;
+  --pm-line: #e1e7ec;
+  --pm-canvas: #edf3f7;
+  --pm-zebra: #f7fafc;
+  --pm-track: #eef2f5;
+}
+
+/* --- Achtergrond: zacht verloop en zeshoeklijnen, zoals de hero van pureminds.nl --- */
+
+body { background: #fff; }
+
+.bg-deco {
+  position: fixed; inset: 0; z-index: -1; pointer-events: none;
+  background:
+    radial-gradient(42rem 30rem at 6% -4%, rgba(26, 185, 226, .16), transparent 70%),
+    radial-gradient(36rem 26rem at 100% 0%, rgba(182, 27, 80, .07), transparent 70%),
+    linear-gradient(#fff, #eef9ff);
+}
+
+.bg-deco::after {
+  content: ''; position: absolute; inset: 0;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='156' height='270' viewBox='0 0 155.88 270'%3E%3Cpath d='M0 90 77.94 45 155.88 90v90L77.94 225 0 180zM77.94 0v45m0 180v45' fill='none' stroke='%2390a4b4' stroke-opacity='.22'/%3E%3C/svg%3E") 0 0 / 156px 270px;
+  -webkit-mask-image: linear-gradient(#000, transparent 75%);
+  mask-image: linear-gradient(#000, transparent 75%);
+}
+
+/* --- Kaarten --- */
+
+.card {
+  background: #fff;
+  border: 1px solid var(--pm-line);
+  box-shadow: 0 1px 2px rgba(16, 40, 60, .05), 0 24px 48px -32px rgba(16, 40, 60, .35);
+}
+
+/* Kaartkop met titel links en acties rechts */
+.card-head {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: .75rem;
+  border-bottom: 1px solid var(--pm-line);
+  padding: .75rem 1.25rem;
+}
+
+.card-title { font-size: .9375rem; font-weight: 700; line-height: 1.3; }
+
+/* De zeshoek uit het logo; als clip-path bruikbaar op elk vierkantje */
+.hex { clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%); }
+
+/* --- Knoppen: hoekig, kleine letters, zoals op de site --- */
+
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: .5rem;
+  border: 2px solid transparent;
+  font-weight: 700; line-height: 1.25; white-space: nowrap;
+  transition: background-color .15s, border-color .15s, color .15s, transform .1s;
+}
+.btn:focus-visible { outline: 3px solid rgba(26, 185, 226, .5); outline-offset: 2px; }
+.btn:disabled { opacity: .6; cursor: not-allowed; }
+.btn svg { flex: none; }
+
+.btn-primary { background: var(--pm-magenta); color: #fff; }
+.btn-primary:not(:disabled):hover { background: var(--pm-magenta-dark); }
+.btn-primary:not(:disabled):active { transform: translateY(1px); }
+
+.btn-outline { background: #fff; border-color: var(--pm-cyan); color: var(--pm-ink); }
+.btn-outline:not(:disabled):hover { background: var(--pm-cyan); }
+
+/* Stille variant voor acties die niet mogen concurreren met de hoofdactie,
+   zoals een kopieerknop bij elke suggestie. */
+.btn-quiet { background: transparent; border-color: var(--pm-line); color: var(--pm-muted); }
+.btn-quiet:not(:disabled):hover { border-color: var(--pm-cyan); color: var(--pm-ink); background: var(--pm-soft); }
+.btn-quiet.is-done { border-color: var(--pm-green); color: #00704f; background: #e3f4ee; }
+
+.btn-sm { padding: .4rem .7rem; font-size: .8125rem; }
+.btn-xs { padding: .25rem .5rem; font-size: .75rem; gap: .35rem; }
+
+/* --- Invoervelden --- */
+
+.input {
+  width: 100%;
+  border: 1px solid #d5dee5; background: #fff;
+  padding: .625rem .875rem;
+  font-size: .875rem; color: var(--pm-ink);
+  transition: border-color .15s, box-shadow .15s;
+}
+.input::placeholder { color: #8d99a3; }
+.input:focus { outline: none; border-color: var(--pm-cyan); box-shadow: 0 0 0 4px rgba(26, 185, 226, .18); }
+.input[aria-invalid="true"] { border-color: var(--pm-magenta); }
+
+/* Invulstatus per veld: het nummer in de zeshoek wordt een groen vinkje zodra het veld gevuld is */
+.field-badge {
+  width: 1.45rem; height: 1.675rem; flex: none;
+  display: grid; place-items: center;
+  font-size: .75rem; font-weight: 800;
+  background: var(--pm-tint); color: var(--pm-blue);
+  transition: background-color .2s, color .2s;
+}
+.is-filled .field-badge { background: var(--pm-green); color: #fff; }
+.is-filled .field-num { display: none; }
+.field:not(.is-filled) .field-check { display: none; }
+
+.field-label { display: flex; align-items: center; gap: .625rem; margin-bottom: .5rem; font-size: .875rem; font-weight: 700; }
+.field-hint { margin-top: .375rem; font-size: .75rem; color: var(--pm-muted); }
+.field-hint.is-ok { font-weight: 600; color: #00704f; }
+.field-hint.is-info { font-weight: 600; color: var(--pm-blue); }
+.field-hint.is-error { font-weight: 600; color: #9e1744; }
+
+/* --- Voortgang in stappen --- */
+
+.step {
+  background: none; border: 0; padding: 0; font: inherit; cursor: default;
+  display: flex; align-items: center; gap: .4rem;
+  color: #8d99a3; white-space: nowrap;
+}
+.step-dot {
+  width: 1.1rem; height: 1.27rem; flex: none;
+  display: grid; place-items: center;
+  font-size: .625rem; font-weight: 800;
+  background: var(--pm-track); color: #8d99a3;
+}
+.step[data-state="active"] { color: var(--pm-ink); font-weight: 700; }
+.step[data-state="active"] .step-dot { background: var(--pm-cyan); color: var(--pm-ink); }
+.step[data-state="done"] { color: var(--pm-ink); cursor: pointer; }
+.step[data-state="done"]:hover { color: var(--pm-blue); text-decoration: underline; text-underline-offset: 3px; }
+.step[data-state="done"] .step-dot { background: var(--pm-green); color: #fff; }
+.step[data-state="done"] .step-num { display: none; }
+.step:not([data-state="done"]) .step-check { display: none; }
+
+/* Dunne voortgangsbalk bovenin een kaart, voor het wachten op de API */
+.progress-track { height: 3px; background: var(--pm-track); overflow: hidden; }
+.progress-track span { display: block; height: 100%; background: linear-gradient(90deg, var(--pm-cyan), var(--pm-deep)); transition: width .4s ease; }
+.progress-track[data-indeterminate] span { width: 35%; animation: progress-slide 1.5s ease-in-out infinite; }
+@keyframes progress-slide {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(340%); }
+}
+
+/* --- Labels en tags --- */
+
+/**
+ * Breekt ook woorden zonder spaties af, zoals een lange URL. Nodig omdat
+ * `overflow-wrap: break-word` niet meetelt voor de min-content-breedte: een URL
+ * rekt daarmee de hele grid-kolom op en duwt de pagina buiten het scherm.
+ */
+.break-anywhere { overflow-wrap: anywhere; }
+
+.pill {
+  display: inline-block; max-width: 100%; padding: .1rem .5rem;
+  font-size: .75rem; line-height: 1.5; overflow-wrap: anywhere;
+  background: var(--pm-track); color: var(--pm-muted);
+}
+.pill strong { font-weight: 700; }
+.pill-good { background: #e3f4ee; color: #00704f; }
+.pill-mid { background: #fdf2de; color: #8f5600; }
+.pill-bad { background: #fbe8ee; color: #9e1744; }
+.pill-info { background: var(--pm-tint); color: var(--pm-blue); }
+
+/* --- Scoretegels: getal, korte omschrijving en een balk --- */
+
+.score-tile { border: 1px solid var(--pm-line); border-left: 4px solid var(--pm-cyan); padding: .75rem 1rem .9rem; background: #fff; }
+.score-label { font-size: .6875rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--pm-muted); }
+.score-value { margin-top: .1rem; font-size: 1.75rem; line-height: 1.15; font-weight: 700; letter-spacing: -.02em; }
+.score-value small { font-size: .875rem; font-weight: 600; letter-spacing: 0; color: var(--pm-muted); }
+.score-bar { margin-top: .5rem; height: 5px; background: var(--pm-track); }
+.score-bar span { display: block; height: 100%; background: var(--pm-cyan); }
+
+/* --- Tabellen --- */
+
+.table-wrap { overflow-x: auto; }
+.data-table { width: 100%; border-collapse: collapse; font-size: .8125rem; line-height: 1.55; }
+.data-table th {
+  background: var(--pm-tint); border-bottom: 2px solid var(--pm-cyan);
+  padding: .6rem .75rem; text-align: left; vertical-align: bottom; font-weight: 700;
+}
+.data-table td { border-bottom: 1px solid var(--pm-line); padding: .6rem .75rem; vertical-align: top; }
+.data-table tbody tr:nth-child(even) td { background: var(--pm-zebra); }
+
+/* --- Uitklapbare uitleg naast een knop --- */
+
+.popover {
+  position: absolute; z-index: 30;
+  width: min(21rem, calc(100vw - 2.5rem));
+  background: #fff; border: 1px solid var(--pm-line); border-top: 3px solid var(--pm-cyan);
+  box-shadow: 0 18px 40px -16px rgba(16, 40, 60, .35);
+  padding: 1rem 1.1rem;
+}
+.popover kbd {
+  font-family: inherit; font-size: .75rem; font-weight: 700;
+  border: 1px solid #d5dee5; border-bottom-width: 2px;
+  padding: 0 .3rem; background: var(--pm-zebra); color: var(--pm-ink);
+}
+
+/* Directe terugkoppeling bij kopiëren: verschijnt boven de knop en verdwijnt vanzelf */
+.tooltip {
+  position: absolute; bottom: calc(100% + .4rem); right: 0; z-index: 20;
+  padding: .25rem .5rem;
+  background: var(--pm-ink); color: #fff;
+  font-size: .6875rem; font-weight: 600; white-space: nowrap;
+  animation: tooltip-in .15s ease-out;
+}
+@keyframes tooltip-in { from { opacity: 0; transform: translateY(3px); } }
+
+/* --- Meldingen --- */
+
+.notice { border-left: 4px solid var(--pm-cyan); background: #fff; padding: .75rem 1rem; font-size: .875rem; line-height: 1.6; }
+.notice-error { border-left-color: var(--pm-magenta); color: #9e1744; }
+.notice-warn { border-left-color: #e0951f; color: #8f5600; }
+.notice-title { font-weight: 700; }
+
+/* --- Skeletons tijdens het laden --- */
+
+.shimmer {
+  background: linear-gradient(90deg, #eef3f6 0%, #e1eaf0 50%, #eef3f6 100%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s linear infinite;
+}
+@keyframes shimmer { to { background-position: -200% 0; } }
+
+/* --- Toegankelijkheid --- */
+
+@media (prefers-reduced-motion: reduce) {
+  .shimmer, .animate-spin, .progress-track[data-indeterminate] span, .tooltip { animation: none; }
+  .progress-track[data-indeterminate] span { width: 100%; }
+}
+
+/* --- Afdrukken: alleen de resultaten, zonder chrome --- */
+
+@media print {
+  html, body { height: auto !important; overflow: visible !important; }
+  body { background: #fff; }
+  .bg-deco, .no-print { display: none !important; }
+  .card { border: 0; box-shadow: none; }
+}

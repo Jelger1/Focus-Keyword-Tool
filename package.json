@@ -1,0 +1,13 @@
+{
+  "name": "seo-content-gap-analyzer",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Interne SEO-tool: vergelijkt een pagina met de organische topresultaten en brengt ontbrekende koppen, termen en FAQ's in kaart.",
+  "scripts": {
+    "dev": "vercel dev"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.125.0"
+  }
+}

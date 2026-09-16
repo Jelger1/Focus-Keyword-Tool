@@ -1,0 +1,9 @@
+node_modules/
+.vercel/
+.env
+.env.local
+.env*.local
+.DS_Store
+
+# Lokale back-ups van VS Code (Local History), bevatten ook kopieën van .env.local
+.history/
