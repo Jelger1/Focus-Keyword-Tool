@@ -176,6 +176,7 @@ async function requestAnalysis(data) {
 function renderReport(report) {
   output.replaceChildren(
     dekkingCard(report),
+    serpCard(report),
     koppenCard(report),
     termenCard(report),
     vragenCard(report)
@@ -187,10 +188,18 @@ function renderReport(report) {
   );
 }
 
+/** "3/7": hoeveel van de vergeleken concurrenten iets doen. Altijd een telling, nooit een schatting. */
+function share(count, report) {
+  return `${count}/${report.coverage.competitorsCompared}`;
+}
+
 /** 1. Dekkingsgraad: de harde cijfers plus de kanttekening erbij. */
 function dekkingCard(report) {
-  const { coverage, page, intent } = report;
-  const { wrapper } = card('Dekkingsgraad', `Zoekwoord: ${report.keyword}`);
+  const { coverage, page, intent, serp } = report;
+  const { wrapper } = card(
+    'Dekkingsgraad',
+    `Zoekwoord: ${report.keyword} · vergeleken met ${coverage.competitorsCompared} pagina's uit de Google-top 10`
+  );
   const body = el('div', 'p-5 space-y-4');
 
   const tiles = el('div', 'grid gap-3 sm:grid-cols-3');
@@ -199,7 +208,7 @@ function dekkingCard(report) {
     scoreTile(
       'Woorden',
       page.wordCount.toLocaleString('nl-NL'),
-      coverage.benchmarkWordCount ? `van ~${coverage.benchmarkWordCount.toLocaleString('nl-NL')}` : '',
+      coverage.benchmarkWordCount ? `mediaan ${coverage.benchmarkWordCount.toLocaleString('nl-NL')}` : '',
       coverage.wordCountRatio,
       scoreTone(coverage.wordCountRatio)
     ),
@@ -221,6 +230,11 @@ function dekkingCard(report) {
   const split = el('div', 'flex flex-wrap gap-2');
   split.append(
     el('span', 'pill pill-info', intent.type || 'onbekend'),
+    el(
+      'span',
+      `pill ${serp.targetPosition ? 'pill-good' : ''}`,
+      serp.targetPosition ? `jouw pagina staat op #${serp.targetPosition}` : 'jouw pagina staat niet in de top 10'
+    ),
     el('span', 'pill pill-good', `${coverage.topicsWithHeading} met eigen kop`),
     el('span', 'pill pill-mid', `${coverage.topicsInTextOnly} alleen in de tekst`),
     el('span', 'pill pill-bad', `${coverage.topicsMissing} ontbreekt`)
@@ -231,7 +245,13 @@ function dekkingCard(report) {
   metaRow(meta, 'Pagina', page.url);
   metaRow(meta, 'H1', page.h1 || '(geen H1 gevonden)');
   metaRow(meta, 'Titel', page.title || '(geen titel)');
-  metaRow(meta, 'Koppen', `${page.headings.length} gevonden`);
+  metaRow(
+    meta,
+    'Woorden top 10',
+    coverage.wordCountRange
+      ? `${coverage.wordCountRange[0].toLocaleString('nl-NL')} – ${coverage.wordCountRange[1].toLocaleString('nl-NL')}`
+      : '—'
+  );
   body.append(meta);
 
   body.append(el('p', 'text-xs leading-5 text-pm-muted border-t border-pm-line pt-3', report.disclaimer));
@@ -278,26 +298,78 @@ function scoreTone(percentage) {
   return TONES.bad;
 }
 
-/** 2. Ontbrekende koppen, gesorteerd op hoe vaak de topresultaten ze behandelen. */
-function koppenCard(report) {
-  const { wrapper } = card('Ontbrekende koppen', 'Wat de topresultaten behandelen en jouw pagina niet');
-  const body = el('div', 'p-5 space-y-3');
+/** 2. De bronnen: met welke pagina's is er precies vergeleken, en welke vielen af? */
+const RESULT_STATUS = {
+  vergeleken: 'pill-good',
+  'jouw pagina': 'pill-info',
+  'eigen domein': '',
+  overgeslagen: '',
+  mislukt: 'pill-bad',
+};
 
-  const missing = [...report.missingTopics].sort(
-    (a, b) => prevalenceWeight(b.prevalence) - prevalenceWeight(a.prevalence)
+function serpCard(report) {
+  const { serp } = report;
+  const { wrapper } = card(
+    `Vergeleken met de Google-top 10`,
+    `${serp.provider} · opgehaald ${new Date(report.generatedAt).toLocaleString('nl-NL')}`
   );
 
-  if (missing.length === 0) {
-    body.append(emptyNote('Geen ontbrekende onderwerpen gevonden. De pagina dekt alles wat de topresultaten behandelen.'));
+  const wrap = el('div', 'table-wrap');
+  const table = el('table', 'data-table');
+  const head = el('thead');
+  const headRow = el('tr');
+  ['#', 'Pagina', 'Woorden', 'Koppen', 'Status'].forEach((label) => headRow.append(el('th', null, label)));
+  head.append(headRow);
+
+  const bodyRows = el('tbody');
+  serp.results.forEach((result) => {
+    const row = el('tr');
+    row.append(el('td', 'tabular-nums font-bold', result.position));
+
+    const page = el('td', 'min-w-[14rem]');
+    const link = el('a', 'font-semibold text-pm-blue hover:underline break-anywhere', result.title || result.domain);
+    link.href = result.url;
+    link.target = '_blank';
+    link.rel = 'noopener';
+    page.append(link, el('div', 'text-xs text-pm-muted break-anywhere', result.domain));
+    row.append(page);
+
+    row.append(el('td', 'tabular-nums', result.wordCount != null ? result.wordCount.toLocaleString('nl-NL') : '—'));
+    row.append(el('td', 'tabular-nums', result.headingCount ?? '—'));
+
+    const status = el('td');
+    status.append(el('span', `pill ${RESULT_STATUS[result.status] ?? ''}`, result.status));
+    if (result.reason) status.append(el('div', 'mt-1 text-xs text-pm-muted', result.reason));
+    row.append(status);
+
+    bodyRows.append(row);
+  });
+
+  table.append(head, bodyRows);
+  wrap.append(table);
+  wrapper.append(wrap);
+  return wrapper;
+}
+
+/** 3. Ontbrekende koppen, gesorteerd op hoeveel concurrenten het onderwerp behandelen. */
+function koppenCard(report) {
+  const { wrapper } = card(
+    'Ontbrekende koppen',
+    'Onderwerpen die minstens twee concurrenten behandelen, met hun letterlijke koppen als bron'
+  );
+  const body = el('div', 'p-5 space-y-3');
+
+  if (report.missingTopics.length === 0) {
+    body.append(emptyNote('Geen ontbrekende onderwerpen gevonden. De pagina dekt alles wat meerdere concurrenten behandelen.'));
   } else {
-    missing.forEach((topic) => body.append(topicRow(topic)));
+    report.missingTopics.forEach((topic) => body.append(topicRow(topic, report)));
   }
 
   if (report.partialTopics.length) {
     body.append(
       details(
         `${report.partialTopics.length} onderwerpen staan wel in de tekst, maar zonder eigen kop`,
-        report.partialTopics.map((topic) => topicRow(topic, true))
+        report.partialTopics.map((topic) => topicRow(topic, report, true))
       )
     );
   }
@@ -306,7 +378,10 @@ function koppenCard(report) {
     const list = el('ul', 'space-y-1.5 pt-1');
     report.coveredTopics.forEach((topic) => {
       const item = el('li', 'flex gap-2 text-sm');
-      item.append(el('span', 'text-pm-green font-bold', '✓'), el('span', null, topic.heading));
+      item.append(
+        el('span', 'text-pm-green font-bold', '✓'),
+        el('span', null, `${topic.heading} (${share(topic.coveredBy, report)})`)
+      );
       list.append(item);
     });
     body.append(details(`${report.coveredTopics.length} onderwerpen heb je al goed staan`, [list]));
@@ -316,18 +391,14 @@ function koppenCard(report) {
   return wrapper;
 }
 
-function prevalenceWeight(prevalence) {
-  return { 'vrijwel alle': 3, meerdere: 2, enkele: 1 }[prevalence] || 0;
-}
-
-function topicRow(topic, inTextOnly = false) {
+function topicRow(topic, report, inTextOnly = false) {
   const row = el('div', 'border border-pm-line p-4');
 
   const top = el('div', 'flex items-start justify-between gap-3');
   const left = el('div', 'min-w-0 space-y-1');
   const labels = el('div', 'flex flex-wrap items-center gap-2');
   labels.append(el('span', 'pill pill-info', topic.level));
-  labels.append(el('span', 'pill', `${topic.prevalence} topresultaten`));
+  labels.append(el('span', 'pill', `${share(topic.coveredBy, report)} concurrenten`));
   if (inTextOnly) labels.append(el('span', 'pill pill-mid', 'staat er al, zonder kop'));
   left.append(labels);
   left.append(el('p', 'text-sm font-bold leading-snug break-anywhere', topic.heading));
@@ -343,6 +414,19 @@ function topicRow(topic, inTextOnly = false) {
     row.append(subs);
   }
 
+  // De bewijslast: welke kop bij welke concurrent. Zo kan een SEO-specialist zelf
+  // beoordelen of de groepering klopt.
+  const sources = el('ul', 'mt-3 space-y-1 border-t border-dashed border-pm-line pt-2');
+  topic.sources.forEach((source) => {
+    const item = el('li', 'flex gap-2 text-xs leading-5');
+    item.append(el('span', 'font-bold tabular-nums text-pm-blue', `#${source.position}`));
+    const text = el('span', 'min-w-0 break-anywhere');
+    text.append(el('span', 'text-pm-muted', `${source.domain}: `), el('span', null, `"${source.heading}"`));
+    item.append(text);
+    sources.append(item);
+  });
+  row.append(sources);
+
   return row;
 }
 
@@ -353,34 +437,38 @@ function topicMarkdown(topic) {
   return lines.join('\n');
 }
 
-/** 3. Semantische termen: wat concurrenten gebruiken en hier ontbreekt. */
+/** 4. Semantische termen: geteld bij de concurrenten, ontbrekend op de doelpagina. */
 function termenCard(report) {
-  const { wrapper } = card('Semantische termen', 'Termen die bij dit onderwerp horen en op je pagina ontbreken');
+  const total = report.coverage.competitorsCompared;
+  const { wrapper } = card(
+    'Semantische termen',
+    'Termen die meerdere concurrenten gebruiken en die niet op je pagina staan'
+  );
   const body = el('div', 'p-5 space-y-3');
 
   if (report.missingTerms.length === 0) {
-    body.append(emptyNote('Alle verwachte termen staan al op de pagina.'));
+    body.append(emptyNote('Alle gevonden termen staan al op de pagina.'));
   } else {
-    const ORDER = { hoog: 0, middel: 1, laag: 2 };
-    const sorted = [...report.missingTerms].sort((a, b) => ORDER[a.importance] - ORDER[b.importance]);
+    const groups = [
+      { label: 'Bij de meeste concurrenten', tone: ' pill-bad', match: (term) => term.usedBy / total >= 0.5 },
+      { label: 'Bij een deel van de concurrenten', tone: ' pill-mid', match: (term) => term.usedBy / total < 0.5 },
+    ];
 
-    ['hoog', 'middel', 'laag'].forEach((importance) => {
-      const group = sorted.filter((term) => term.importance === importance);
+    groups.forEach(({ label, tone, match }) => {
+      const group = report.missingTerms.filter(match);
       if (!group.length) return;
 
       const block = el('div');
       const heading = el('div', 'flex items-center justify-between gap-3 mb-2');
-      heading.append(el('p', 'text-xs font-bold uppercase tracking-wide text-pm-muted', `Belang: ${importance}`));
+      heading.append(el('p', 'text-xs font-bold uppercase tracking-wide text-pm-muted', label));
       heading.append(copyButton(() => group.map((term) => term.term).join('\n'), 'kopieer groep'));
       block.append(heading);
 
       const list = el('ul', 'space-y-1.5');
       group.forEach((term) => {
         const item = el('li', 'flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-sm');
-        // Groen blijft gereserveerd voor "staat er al"; een term van laag belang
-        // die ontbreekt krijgt dus grijs, niet groen.
-        const tone = importance === 'hoog' ? ' pill-bad' : importance === 'middel' ? ' pill-mid' : '';
         item.append(el('span', `pill${tone}`, term.term));
+        item.append(el('span', 'text-xs font-semibold tabular-nums', share(term.usedBy, report)));
         item.append(el('span', 'text-pm-muted text-xs leading-5', term.context));
         list.append(item);
       });
@@ -391,7 +479,8 @@ function termenCard(report) {
 
   if (report.presentTerms.length) {
     const list = el('ul', 'flex flex-wrap gap-1.5 pt-1');
-    report.presentTerms.forEach((term) => list.append(el('li', 'pill pill-good', `✓ ${term.term}`)));
+    report.presentTerms.forEach((term) =>
+      list.append(el('li', 'pill pill-good', `✓ ${term.term} (${share(term.usedBy, report)})`)));
     body.append(details(`${report.presentTerms.length} termen staan er al`, [list]));
   }
 
@@ -399,34 +488,66 @@ function termenCard(report) {
   return wrapper;
 }
 
-/** 4. Mensen vragen ook. */
+function questionSource(item) {
+  if (item.source === 'Mensen vragen ook') return 'Google: Mensen vragen ook';
+  return `kop bij #${item.position} ${domainFromUrl(item.from)}`;
+}
+
+function domainFromUrl(url) {
+  try {
+    return new URL(url).hostname.replace(/^www\./, '');
+  } catch {
+    return '';
+  }
+}
+
+/** 5. Mensen vragen ook: uit Google zelf en uit vraagkoppen van concurrenten. */
 function vragenCard(report) {
-  const { wrapper } = card('Mensen vragen ook', 'Vragen om als FAQ-blok aan de pagina toe te voegen');
+  const fromGoogle = report.serp.peopleAlsoAsk > 0;
+  const { wrapper } = card(
+    fromGoogle ? 'Mensen vragen ook' : 'Vragen uit de top 10',
+    fromGoogle ? 'Echte vragen uit Google en uit de koppen van concurrenten' : 'Vraagkoppen die concurrenten gebruiken'
+  );
   const body = el('div', 'p-5 space-y-3');
+
+  if (!fromGoogle) {
+    body.append(
+      el(
+        'p',
+        'notice text-xs leading-5 text-pm-muted',
+        'Google toonde via Serper geen "Mensen vragen ook"-blok voor dit zoekwoord (voor Nederlandse zoekopdrachten levert Serper dat meestal niet). Deze vragen komen daarom alleen uit de koppen van concurrenten.'
+      )
+    );
+  }
 
   const open = report.questions.filter((item) => item.status !== 'kop');
   const answered = report.questions.filter((item) => item.status === 'kop');
 
-  if (open.length === 0) {
-    body.append(emptyNote('De pagina beantwoordt alle verwachte vragen al met een eigen kop.'));
+  if (report.questions.length === 0) {
+    body.append(emptyNote('Er zijn geen vragen gevonden: geen "Mensen vragen ook"-blok en geen vraagkoppen bij concurrenten.'));
+  } else if (open.length === 0) {
+    body.append(emptyNote('De pagina beantwoordt alle gevonden vragen al met een eigen kop.'));
   }
 
   open.forEach((item) => {
     const row = el('div', 'border border-pm-line p-4');
     const top = el('div', 'flex items-start justify-between gap-3');
     const left = el('div', 'min-w-0 space-y-1');
-    left.append(
+    const labels = el('div', 'flex flex-wrap items-center gap-2');
+    labels.append(
       el(
         'span',
         `pill ${item.status === 'tekst' ? 'pill-mid' : 'pill-bad'}`,
         item.status === 'tekst' ? 'staat er, maar niet als vraag' : 'ontbreekt'
-      )
+      ),
+      el('span', 'pill', questionSource(item))
     );
+    left.append(labels);
     left.append(el('p', 'text-sm font-bold leading-snug break-anywhere', item.question));
     top.append(left);
     top.append(copyButton(() => `### ${item.question}\n\n${item.angle}`));
     row.append(top);
-    row.append(el('p', 'mt-2 text-sm leading-6 text-pm-muted', item.angle));
+    if (item.angle) row.append(el('p', 'mt-2 text-sm leading-6 text-pm-muted', item.angle));
     body.append(row);
   });
 
@@ -434,7 +555,10 @@ function vragenCard(report) {
     const list = el('ul', 'space-y-1.5 pt-1');
     answered.forEach((item) => {
       const li = el('li', 'flex gap-2 text-sm');
-      li.append(el('span', 'text-pm-green font-bold', '✓'), el('span', null, item.question));
+      li.append(
+        el('span', 'text-pm-green font-bold', '✓'),
+        el('span', null, `${item.question} (${questionSource(item)})`)
+      );
       list.append(li);
     });
     body.append(details(`${answered.length} vragen beantwoordt de pagina al`, [list]));
@@ -462,52 +586,63 @@ function details(summaryText, children) {
 // --- Markdown-export -----------------------------------------------------------
 
 function toMarkdown(report) {
-  const { coverage, page } = report;
+  const { coverage, page, serp } = report;
   const lines = [
     `# Content gap: ${report.keyword}`,
     '',
     `**Pagina:** ${page.url}`,
-    `**Geanalyseerd op:** ${new Date(report.generatedAt).toLocaleString('nl-NL')}`,
+    `**Positie in Google:** ${serp.targetPosition ? `#${serp.targetPosition}` : 'niet in de top 10'}`,
+    `**Geanalyseerd op:** ${new Date(report.generatedAt).toLocaleString('nl-NL')} (${serp.provider})`,
     '',
     '## Dekkingsgraad',
     '',
     `- Onderwerpdekking: **${coverage.score}%** (${coverage.topicsWithHeading} met eigen kop, ${coverage.topicsInTextOnly} alleen in de tekst, ${coverage.topicsMissing} ontbreekt)`,
-    `- Woorden: **${page.wordCount}**${coverage.benchmarkWordCount ? ` tegenover ~${coverage.benchmarkWordCount} bij de topresultaten (${coverage.wordCountRatio}%)` : ''}`,
+    `- Woorden: **${page.wordCount}**${coverage.benchmarkWordCount ? `, mediaan top 10: ${coverage.benchmarkWordCount} (spreiding ${coverage.wordCountRange[0]}–${coverage.wordCountRange[1]})` : ''}`,
     `- Semantische termen aanwezig: **${coverage.termsPresent} van ${coverage.termsTotal}**`,
     `- Zoekintentie: ${report.intent.summary} (${report.intent.type})`,
+    '',
+    '## Vergeleken met',
+    '',
+    ...serp.results.map((result) =>
+      `${result.position}. ${result.url} — ${result.status}${result.wordCount != null ? `, ${result.wordCount} woorden` : ''}${result.reason ? ` (${result.reason})` : ''}`),
     '',
     '## Ontbrekende koppen',
     '',
   ];
 
+  const topicLines = (topic) => {
+    lines.push(`### ${topic.level}: ${topic.heading}`, '', `${topic.why} (${share(topic.coveredBy, report)} concurrenten)`, '');
+    topic.subheadings.forEach((sub) => lines.push(`- H3: ${sub}`));
+    if (topic.subheadings.length) lines.push('');
+    lines.push('Bronnen:');
+    topic.sources.forEach((source) => lines.push(`- #${source.position} ${source.domain}: "${source.heading}"`));
+    lines.push('');
+  };
+
   if (report.missingTopics.length === 0) {
     lines.push('Geen ontbrekende onderwerpen gevonden.', '');
   } else {
-    report.missingTopics.forEach((topic) => {
-      lines.push(`### ${topic.level}: ${topic.heading}`, '', `${topic.why} (${topic.prevalence} topresultaten)`, '');
-      topic.subheadings.forEach((sub) => lines.push(`- H3: ${sub}`));
-      if (topic.subheadings.length) lines.push('');
-    });
+    report.missingTopics.forEach(topicLines);
   }
 
   if (report.partialTopics.length) {
-    lines.push('### Wel aanwezig, maar zonder eigen kop', '');
-    report.partialTopics.forEach((topic) => lines.push(`- ${topic.heading}`));
-    lines.push('');
+    lines.push('## Wel in de tekst, maar zonder eigen kop', '');
+    report.partialTopics.forEach(topicLines);
   }
 
   lines.push('## Ontbrekende semantische termen', '');
   if (report.missingTerms.length === 0) {
     lines.push('Geen.', '');
   } else {
-    report.missingTerms.forEach((term) => lines.push(`- **${term.term}** (${term.importance}) — ${term.context}`));
+    report.missingTerms.forEach((term) =>
+      lines.push(`- **${term.term}** (${share(term.usedBy, report)} concurrenten) — ${term.context}`));
     lines.push('');
   }
 
-  lines.push('## Mensen vragen ook', '');
+  lines.push(report.serp.peopleAlsoAsk > 0 ? '## Mensen vragen ook' : '## Vragen uit de top 10 (vraagkoppen van concurrenten)', '');
   report.questions.forEach((item) => {
     const mark = item.status === 'kop' ? '✓ al beantwoord' : item.status === 'tekst' ? '~ staat in de tekst' : '✗ ontbreekt';
-    lines.push(`- **${item.question}** (${mark}) — ${item.angle}`);
+    lines.push(`- **${item.question}** (${mark}; ${questionSource(item)})${item.angle ? ` — ${item.angle}` : ''}`);
   });
 
   lines.push('', '---', '', report.disclaimer);
@@ -538,6 +673,14 @@ const ERROR_HINTS = {
   blocked_host: 'Alleen openbaar bereikbare pagina\'s kunnen geanalyseerd worden.',
   http_error: 'Test de URL in een privévenster. Blokkeert de server bots, dan kan de tool er niet bij.',
   fetch_failed: 'Controleer de schrijfwijze van het domein. Bestaat de site wel en is hij bereikbaar?',
+  no_serp_key: 'Zet SERPER_API_KEY in Vercel onder Settings → Environment Variables (of lokaal in .env.local).',
+  serp_auth: 'Controleer of de Serper-sleutel klopt en nog actief is op serper.dev.',
+  serp_quota: 'Vul het tegoed aan op serper.dev of wacht tot de limiet vrijkomt.',
+  serp_timeout: 'Serper reageerde niet op tijd. Probeer het zo opnieuw.',
+  serp_failed: 'Serper is mogelijk tijdelijk niet bereikbaar. Probeer het zo opnieuw.',
+  serp_empty: 'Controleer de spelling van het zoekwoord, of kies een zoekwoord met meer zoekvolume.',
+  too_few_competitors: 'De meeste topresultaten blokkeren bots of zijn geen artikelpagina. Kies een ander zoekwoord of probeer het later opnieuw.',
+  truncated: 'Het antwoord werd te lang. Probeer het opnieuw; blijft dit gebeuren, meld het dan.',
   timeout: 'De server reageerde te traag. Probeer het zo opnieuw, of kies een snellere pagina.',
   not_html: 'Geef een gewone webpagina op, geen PDF of afbeelding.',
   empty_page: 'Deze pagina bouwt zijn tekst waarschijnlijk met JavaScript op, of er staat een cookiemuur voor.',
@@ -689,7 +832,7 @@ function storageRemove(key) {
 
   try {
     const saved = JSON.parse(storageGet(STORAGE.report) || 'null');
-    if (saved?.coverage) {
+    if (saved?.serp) {
       lastReport = saved;
       renderReport(saved);
       setStatus('saved', 'Vorige analyse');

@@ -13,19 +13,28 @@ Functions als back-end. Geen build-stap.
 |---|---|
 | `index.html` | De UI: formulier, resultaatkaart, lege staat en het skeleton-template. |
 | `styles.css` | Designsysteem van pureminds.nl: kaarten, knoppen, velden, labels, skeletons. |
-| `app.js` | Formulier, fetch naar de API, de vier resultaatkaarten en de kopieerknoppen. |
-| `api/analyze.js` | Haalt de pagina op, vraagt Claude om de SERP-kant en legt beide naast elkaar. |
+| `app.js` | Formulier, fetch naar de API, de vijf resultaatkaarten en de kopieerknoppen. |
+| `api/analyze.js` | Het endpoint en de Claude-aanroep. |
+| `lib/` | Pagina's uitlezen, Serper, termen tellen en de controle van Claude's output. |
 | `pureminds-logo.*`, `favicon.png` | Huisstijlbeeld. |
 
 ## Hoe de analyse werkt
 
-De pagina wordt **echt opgehaald en gemeten**: koppenstructuur, woordenaantal,
-titel en meta description. De **SERP-kant is een inschatting** van Claude op basis
-van modelkennis — geen live meting van Google.
+1. De **echte Google-top 10** (Nederland) komt via [Serper.dev](https://serper.dev),
+   inclusief het "Mensen vragen ook"-blok.
+2. De doelpagina en alle concurrenten worden **opgehaald en op dezelfde manier
+   gemeten**: koppen, woordenaantal, tekst. Video's en social media worden
+   overgeslagen; geblokkeerde pagina's staan als "mislukt" in het rapport.
+3. De code **telt** welke woorden en woordparen bij minstens 30% van de
+   concurrenten voorkomen.
+4. **Claude groepeert** concurrentkoppen tot onderwerpen en kiest inhoudelijke
+   termen uit de getelde lijst. Per onderwerp moet het letterlijke koppen van
+   minstens twee concurrenten citeren.
+5. De code **controleert elke bron**. Onderwerpen zonder geldige bron verdwijnen.
 
-Elke suggestie van het model wordt daarna tegen de echte paginatekst getoetst. Bij
-een verschil van mening wint altijd de ruimhartigste uitkomst, zodat de tool nooit
-adviseert iets toe te voegen dat er al staat. Een analyse duurt ongeveer een minuut.
+Het rapport toont bij elke suggestie de bron, zodat een SEO-specialist de
+groepering zelf kan beoordelen. Een analyse duurt ongeveer een minuut en kost
+circa 20 cent aan Claude plus één Serper-zoekopdracht.
 
 ## Lokaal draaien
 
@@ -46,5 +55,6 @@ onder **Settings → Environment Variables**.
 
 | Variabele | Verplicht | Waarvoor |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | ja | De analyse van de topresultaten. |
+| `ANTHROPIC_API_KEY` | ja | Onderwerpen groeperen, termen kiezen, antwoordrichtingen. |
+| `SERPER_API_KEY` | ja | De echte Google-top 10. Aanmaken op serper.dev. |
 | `APP_PASSWORD` | nee | Zet je die, dan vraagt de tool eenmalig om een wachtwoord. |
