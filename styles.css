@@ -252,3 +252,40 @@ body { background: #fff; }
   .bg-deco, .no-print { display: none !important; }
   .card { border: 0; box-shadow: none; }
 }
+
+/* --- Stappen van de flow, onder de kaartkop --- */
+
+.steps {
+  display: flex; flex-wrap: wrap; gap: .5rem 1.25rem;
+  padding: .55rem 1.25rem;
+  border-bottom: 1px solid var(--pm-line);
+  font-size: .75rem;
+}
+.steps .step { cursor: default; }
+.steps .step[data-state="done"] { cursor: default; }
+.steps .step[data-state="done"]:hover { text-decoration: none; color: var(--pm-ink); }
+
+/* --- Oordeel van de intent check --- */
+
+.verdict { border-left: 4px solid var(--pm-cyan); background: var(--pm-soft); padding: .9rem 1.1rem; }
+.verdict-yes { border-left-color: var(--pm-green); background: #e3f4ee; }
+.verdict-no { border-left-color: var(--pm-magenta); background: #fbe8ee; }
+
+/* Twee vlakken naast elkaar: jouw pagina tegenover de SERP */
+.side-box { border: 1px solid var(--pm-line); padding: .85rem 1rem; background: #fff; }
+
+/* --- Bestand inladen (Search Console-export) --- */
+
+.dropzone {
+  display: block; cursor: pointer; text-align: center;
+  border: 2px dashed #c9d4dc; background: #fff;
+  padding: 1.1rem 1rem;
+  transition: border-color .15s, background-color .15s;
+}
+.dropzone:hover, .dropzone.is-over { border-color: var(--pm-cyan); background: var(--pm-soft); }
+.dropzone.is-filled { border-style: solid; border-color: var(--pm-green); background: #e3f4ee; }
+
+textarea.input { resize: vertical; line-height: 1.5; }
+
+/* Het focus zoekwoord als blikvanger */
+.keyword-hero { font-size: 1.375rem; line-height: 1.2; font-weight: 800; letter-spacing: -.02em; overflow-wrap: anywhere; }

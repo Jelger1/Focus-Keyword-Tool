@@ -1,11 +1,11 @@
-# CLAUDE.md — SEO Content Gap Analyzer
+# CLAUDE.md — Keyword Focus & Intent Check
 
 Vaste instructieset voor dit project. Lees dit bestand voordat je code wijzigt.
 
-> Dit project hergebruikt het designsysteem van de eerdere interne tool
-> (Landingpage & Ads Optimizer). De styling is behouden, alle oude logica is
-> verwijderd. Zoek dus niet naar CRO- of Google Ads-functionaliteit: die bestaat
-> hier niet meer.
+> Dit project is de opvolger van de SEO Content Gap Analyzer en hergebruikt het
+> designsysteem van de eerdere interne tools. De content gap is nu de laatste
+> stap; de tool controleert eerst of het focus zoekwoord überhaupt bij de pagina
+> past. Zoek niet naar CRO- of Google Ads-functionaliteit: die bestaat hier niet.
 
 ---
 
@@ -14,21 +14,20 @@ Vaste instructieset voor dit project. Lees dit bestand voordat je code wijzigt.
 Een marketeer vult twee dingen in:
 
 1. **Doel-URL** — de klantpagina die moet ranken.
-2. **Primair zoekwoord** — het zoekwoord waarop die pagina moet scoren.
+2. **Focus zoekwoord** — het zoekwoord waarop die pagina moet scoren.
 
-De tool haalt de pagina op, haalt de echte organische Google-top 10 (NL) voor dat
-zoekwoord op via Serper.dev, leest die pagina's op dezelfde manier uit en levert
-vier inzichten:
+De tool haalt de pagina op, haalt de Google-top 10 (NL) voor dat zoekwoord op via
+Ahrefs, leest die pagina's op dezelfde manier uit en beantwoordt eerst de
+hoofdvraag: **komt het doel van deze pagina overeen met de gemeenschappelijke
+intentie van de SERP?**
 
-| Blok | Inhoud |
+| Uitkomst | Wat er gebeurt |
 |---|---|
-| Dekkingsgraad | Woordenaantal en dekking van de pagina versus de top-resultaten. |
-| Ontbrekende koppen | H2's en H3's die concurrenten behandelen en de pagina mist. |
-| Semantische termen | Woorden die concurrenten gebruiken en op de pagina ontbreken. |
-| Mensen vragen ook | FAQ-items die als blok aan de pagina toegevoegd kunnen worden. |
+| Match | Keyword mapping (primary, secondary, supporting, varianten, merktermen), focus keyword optimalisatie (H1, title, meta, eerste alinea), aanbevelingen met SERP-bewijs, semantische termen, vragen, "niet doen", samenvatting. |
+| Geen match | De marketeer laadt een Search Console-export in (of kiest de Ahrefs-schatting). Claude kiest daaruit een passend zoekwoord (B1) of stelt er zelf een voor dat de code op zoekvolume checkt (B2). Met dat zoekwoord start automatisch een nieuwe analyse, maximaal twee rondes. |
 
 De output is een dashboard van kaarten, kopieerbaar per suggestie én in één keer
-als markdown.
+als markdown, in de opbouw van onze focus keyword-documenten.
 
 ---
 
@@ -39,15 +38,23 @@ Functions.
 
 | Pad | Rol |
 |---|---|
-| `index.html` | De volledige UI: chrome, formulier, resultaatkaart, `<template>`s voor lege en ladende staat. |
-| `styles.css` | Het designsysteem: kaarten, knoppen, invoervelden, labels, scoretegels, skeletons. |
-| `app.js` | Frontend-logica: formulier, fetch naar de API, rendering, kopieerknoppen. |
-| `api/analyze.js` | POST-endpoint en de Claude-aanroep. Dun: het echte werk zit in `lib/`. |
-| `lib/page.js` | Pagina's ophalen en uitlezen — voor doelpagina én concurrenten, identiek. |
-| `lib/serp.js` | De enige plek die de SERP-provider kent. Wisselen van provider = alleen dit bestand. |
-| `lib/compare.js` | Termen tellen, vragen verzamelen, en elke bewering van Claude controleren. |
-| `lib/text.js` | Normalisatie, stopwoorden, stemming. |
-| `vercel.json` | Functie-instellingen (timeout). |
+| `index.html` | De volledige UI: chrome, formulier, stappenbalk, resultaatkaart, `<template>` voor de ladende staat. |
+| `styles.css` | Het designsysteem: kaarten, knoppen, invoervelden, labels, scoretegels, stappen, oordeel, dropzone, skeletons. |
+| `app.js` | Frontend-flow: analyse, herfocus, automatische heranalyse, rendering, kopieerknoppen, markdown-export. |
+| `api/analyze.js` | Verzamelen, intent check en bij een match de content gap. Dun: het echte werk zit in `lib/`. |
+| `api/refocus.js` | Scenario B: een beter zoekwoord zoeken. |
+| `lib/ahrefs.js` | Alle Ahrefs-calls. Velden, timeouts en foutmeldingen staan alleen hier. |
+| `lib/serp.js` | Provider-schakelaar (Ahrefs standaard, Serper terugval). Wisselen van provider = alleen dit bestand. |
+| `lib/page.js` | Pagina's ophalen en uitlezen, voor doelpagina én concurrenten identiek. |
+| `lib/intent.js` | Meten (paginatypes, topzoekwoorden, eigen positie, plaatsing van het zoekwoord), de intent-instructie, de controle van het oordeel. |
+| `lib/gap.js` | Instructie en schema van de content gap-call. |
+| `lib/compare.js` | Termen tellen, vragen verzamelen, mapping-kandidaten, en elke bewering van Claude controleren (`buildReport`). |
+| `lib/refocus.js` | Instructie, schema en controle van de herfocus. |
+| `lib/gsc.js` | Search Console-exports lezen. |
+| `lib/claude.js` | De gedeelde Claude-aanroep (model, schema-output, server-side terugval). |
+| `lib/pagetype.js`, `lib/text.js`, `lib/ratelimit.js` | Paginatypes van Ahrefs vertalen, normalisatie en stemming, rate limit. |
+| `test/run.js` | `npm test`: controles van de meet- en controlecode, zonder externe calls. |
+| `vercel.json` | Functie-instellingen (timeouts). |
 
 Regels:
 
@@ -55,17 +62,28 @@ Regels:
   kleurtokens staan in de `tailwind.config` bovenin `index.html` én als CSS-
   variabelen in `styles.css`. Wijzig je een kleur, wijzig hem dan op beide plekken.
 - **Secrets blijven server-side.** Sleutels staan in omgevingsvariabelen en worden
-  alleen in `api/` gelezen, nooit in de browser.
-- **De API geeft JSON terug**, geen HTML. De frontend bepaalt de opmaak.
+  alleen in `api/` gelezen en als argument aan `lib/` doorgegeven; nooit in de browser.
+- **De API geeft JSON terug**, geen HTML. De frontend bepaalt de opmaak. Een
+  antwoord van `/api/analyze` heeft `stage: 'intent'` (geen match, stop) of
+  `stage: 'compleet'` (het hele rapport); beide bevatten dezelfde basisvelden.
 - **Hulpcode hoort in `lib/`, niet in `api/`.** Vercel maakt van elk bestand in
   `api/` een eigen endpoint.
-- **De code meet, Claude interpreteert, de code controleert.** Claude groepeert
-  concurrentkoppen tot onderwerpen, maar moet per onderwerp letterlijke koppen van
-  minstens twee concurrenten citeren; `buildReport()` gooit alles weg wat daar
-  niet aan voldoet. Termen kiest Claude uit een door de code getelde lijst; vragen
-  komen uit Google en concurrentkoppen. Houd die scheiding intact.
+- **De code meet, Claude interpreteert, de code controleert.** Dat geldt voor
+  elke Claude-call:
+  - intent check: de code telt paginatypes en intentievlaggen; Claude oordeelt;
+    posities die Claude citeert en die niet in de SERP staan, verdwijnen;
+  - content gap: Claude moet per onderwerp letterlijke koppen van minstens twee
+    concurrenten citeren, termen en mapping-zoekwoorden komen uit door de code
+    getelde of opgehaalde lijsten, nieuwe teksten alleen voor plekken waar de
+    meting zegt dat het zoekwoord ontbreekt; `buildReport()` gooit de rest weg;
+  - herfocus: een keuze moet letterlijk in de lijst staan; een AI-voorstel telt pas
+    als Ahrefs er zoekvolume voor kent.
+  Houd die scheiding intact.
 - **Elke externe fetch heeft een timeout** en een nette foutboodschap in het
   Nederlands; een onbereikbare URL mag de tool nooit laten hangen.
+- **Ahrefs-units zijn geld.** Vraag alleen de velden op die gebruikt worden
+  (`select`), verrijk lijsten tot een vast maximum en cache niets in de browser
+  wat de server opnieuw zou moeten ophalen.
 
 ---
 
@@ -81,19 +99,27 @@ Regels:
   hoofdactie, groen `#009670` voor "goed/klaar", oranje `#e0951f` voor "kan beter",
   inkt `#303030` voor tekst. Gebruik de bestaande klassen uit `styles.css` voordat
   je nieuwe CSS schrijft.
+- **Rapportopbouw** volgt de focus keyword-documenten van het team: beoordeling
+  focus keyword, focus keyword behouden of nieuw, keyword mapping, focus keyword
+  optimalisatie, aanbevelingen (SERP-evidence, gap, aanbeveling), niet doen,
+  samenvatting. Nieuwe kaarten of markdown-secties passen in die volgorde.
 
 ---
 
 ## Grenzen
 
 - **Verzin geen data.** Is een cijfer gesimuleerd of geschat, benoem dat in de UI.
-  De marketeer moet het verschil zien tussen een meting en een aanname. Er is
-  daarom bewust geen terugval op geschatte SERP-data als Serper faalt: dan faalt
-  de analyse met een duidelijke melding.
-- **Toon altijd de bronnen.** Met welke URL's vergeleken is, en welke kop bij
-  welke concurrent een onderwerp onderbouwt. Een SEO-specialist moet elke
-  conclusie kunnen natrekken.
-- **Geen valse zekerheid.** De tool levert hypotheses voor een contentschrijver,
-  geen garantie op posities.
+  De marketeer moet het verschil zien tussen een meting (Search Console, gemeten
+  koppen en woorden) en een schatting (Ahrefs-volumes, rankende zoekwoorden via
+  Ahrefs). Er is bewust geen terugval op verzonnen SERP-data als Ahrefs faalt:
+  dan faalt de analyse met een duidelijke melding.
+- **Toon altijd de bronnen.** Met welke URL's vergeleken is, welke kop bij welke
+  concurrent een onderwerp onderbouwt, welke posities een intent-argument dragen,
+  en waar een nieuw zoekwoord vandaan komt (Search Console, Ahrefs of AI-voorstel).
+- **Geen valse zekerheid.** Het oordeel over de intentie is een interpretatie op
+  basis van gemeten data; de tool levert hypotheses voor een contentschrijver,
+  geen garantie op posities. De zekerheid (hoog, middel, laag) staat erbij.
+- **Geen oneindige lussen.** Een herfocus mag twee rondes; daarna kiest de
+  marketeer zelf.
 - Respecteer `robots.txt`-achtige fatsoensregels bij het ophalen van pagina's:
   één request per pagina, duidelijke User-Agent, geen crawls.

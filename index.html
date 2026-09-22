@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>SEO Content Gap Analyzer &middot; Pure Minds</title>
+  <title>Keyword Focus &amp; Intent Check &middot; Pure Minds</title>
   <link rel="icon" type="image/png" href="favicon.png" />
   <meta name="theme-color" content="#1ab9e2" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -35,7 +35,7 @@
   <!-- Cyaan balk, zoals bovenaan pureminds.nl -->
   <div class="no-print flex-none bg-pm-cyan px-4 py-1.5 text-center text-xs font-semibold text-pm-ink">
     <a href="https://www.pureminds.nl/" target="_blank" rel="noopener" class="underline underline-offset-2 hover:no-underline">pure minds</a>
-    <span class="mx-1.5">|</span>interne tool: SEO content gap<span class="hidden sm:inline"> tussen jouw pagina en de top-resultaten</span>
+    <span class="mx-1.5">|</span>interne tool: keyword focus &amp; intent check<span class="hidden sm:inline"> voor één pagina en één zoekwoord</span>
   </div>
 
   <header class="no-print flex-none border-b border-pm-line bg-white/85 backdrop-blur">
@@ -44,24 +44,25 @@
         <img src="pureminds-logo.webp" alt="Pure Minds" width="106" height="39" class="h-[2.4rem] w-auto flex-none" />
         <span class="hidden sm:block h-9 w-px bg-pm-line" aria-hidden="true"></span>
         <div class="hidden sm:block min-w-0">
-          <h1 class="text-[15px] font-bold leading-tight tracking-tight">SEO Content Gap Analyzer</h1>
-          <p class="truncate text-xs text-pm-muted">Welke onderwerpen behandelen de top-resultaten wél en jouw pagina niet?</p>
+          <h1 class="text-[15px] font-bold leading-tight tracking-tight">Keyword Focus &amp; Intent Check</h1>
+          <p class="truncate text-xs text-pm-muted">Past je pagina bij het focus zoekwoord? En wat mist er dan nog?</p>
         </div>
       </div>
-      <p class="hidden lg:block flex-none text-[13px] font-semibold">contentbriefing<span class="font-normal text-pm-muted"> &middot; geen vervanging voor keyword research</span></p>
+      <p class="hidden lg:block flex-none text-[13px] font-semibold">focus check + contentbriefing<span class="font-normal text-pm-muted"> &middot; geen vervanging voor keyword research</span></p>
     </div>
   </header>
 
   <main class="w-full max-w-7xl mx-auto px-4 sm:px-6 py-4 sm:py-5 lg:py-4 grid gap-5 lg:gap-6 lg:grid-cols-5 lg:flex-1 lg:min-h-0">
 
     <!-- Invoer -->
-    <section class="no-print min-w-0 lg:col-span-2 lg:min-h-0">
+    <!-- Op desktop staat de pagina op schermhoogte; de kolom scrolt zelf als het formulier niet past -->
+    <section class="no-print min-w-0 lg:col-span-2 lg:min-h-0 lg:overflow-y-auto">
       <form id="analyze-form" class="card border-t-[3px] border-t-pm-cyan p-5 sm:p-6 flex flex-col gap-5">
         <div class="sm:hidden">
-          <h1 class="text-base font-bold leading-tight">SEO Content Gap Analyzer</h1>
-          <p class="text-xs text-pm-muted">Vergelijk je pagina met de top-resultaten.</p>
+          <h1 class="text-base font-bold leading-tight">Keyword Focus &amp; Intent Check</h1>
+          <p class="text-xs text-pm-muted">Past je pagina bij het focus zoekwoord?</p>
         </div>
-        <h2 class="text-xl font-bold tracking-tight">Analyseer je pagina<span class="text-pm-cyan">.</span></h2>
+        <h2 class="text-xl font-bold tracking-tight">Check je focus zoekwoord<span class="text-pm-cyan">.</span></h2>
 
         <div class="field">
           <label for="target-url" class="field-label">
@@ -82,11 +83,11 @@
               <span class="field-num">2</span>
               <svg class="field-check h-3 w-3" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M16.7 5.3a1 1 0 010 1.4l-8 8a1 1 0 01-1.4 0l-4-4a1 1 0 011.4-1.4L8 12.58l7.3-7.3a1 1 0 011.4 0z" clip-rule="evenodd"/></svg>
             </span>
-            Primair zoekwoord
+            Focus zoekwoord
           </label>
           <input type="text" id="keyword" name="keyword" required autocomplete="off"
             placeholder="zonnepanelen kopen" class="input" />
-          <p class="field-hint">Eén zoekwoord waarop deze pagina moet ranken.</p>
+          <p class="field-hint">Het zoekwoord waarop deze pagina moet ranken. De tool controleert eerst of het past bij de pagina en de Google-top 10.</p>
         </div>
 
         <div class="space-y-2 pt-1">
@@ -99,12 +100,21 @@
             <svg id="submit-arrow" class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg>
           </button>
           <div class="flex items-center justify-between gap-3 text-xs text-pm-muted">
-            <span>Duurt ongeveer een minuut</span>
+            <span>Duurt één tot twee minuten</span>
             <button type="reset" id="reset-btn"
               class="whitespace-nowrap px-2 py-1.5 -mr-2 font-semibold text-pm-muted hover:text-pm-magenta transition disabled:opacity-40 disabled:pointer-events-none">
               alles wissen
             </button>
           </div>
+        </div>
+
+        <div class="border-t border-pm-line pt-4 text-xs leading-5 text-pm-muted">
+          <p class="font-bold text-pm-ink">Zo werkt het</p>
+          <ol class="mt-1 space-y-1 list-decimal pl-4">
+            <li>De tool haalt je pagina, de Google-top 10 (Ahrefs) en de zoekwoordcijfers op.</li>
+            <li>Intent check: past het doel van je pagina bij wat de zoeker wil?</li>
+            <li>Ja: keyword mapping, optimalisatie en content gap. Nee: een beter zoekwoord zoeken via Search Console of Ahrefs.</li>
+          </ol>
         </div>
       </form>
     </section>
@@ -115,10 +125,25 @@
         <div class="no-print flex-none">
           <div class="card-head">
             <div class="flex items-center gap-2.5">
-              <h2 class="card-title">Content gap</h2>
+              <h2 class="card-title">Focus check</h2>
               <span id="status-badge" role="status" aria-live="polite" class="hidden px-2 py-0.5 text-xs font-semibold tabular-nums"></span>
             </div>
             <div id="result-actions" class="relative flex flex-wrap items-center gap-2"></div>
+          </div>
+          <!-- De drie stappen van de flow; app.js zet de status per stap -->
+          <div id="steps" class="steps">
+            <button type="button" class="step" data-state="todo">
+              <span class="step-dot"><span class="step-num">1</span><svg class="step-check h-2.5 w-2.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M16.7 5.3a1 1 0 010 1.4l-8 8a1 1 0 01-1.4 0l-4-4a1 1 0 011.4-1.4L8 12.58l7.3-7.3a1 1 0 011.4 0z" clip-rule="evenodd"/></svg></span>
+              <span class="step-text">intent check</span>
+            </button>
+            <button type="button" class="step" data-state="todo">
+              <span class="step-dot"><span class="step-num">2</span><svg class="step-check h-2.5 w-2.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M16.7 5.3a1 1 0 010 1.4l-8 8a1 1 0 01-1.4 0l-4-4a1 1 0 011.4-1.4L8 12.58l7.3-7.3a1 1 0 011.4 0z" clip-rule="evenodd"/></svg></span>
+              <span class="step-text">focus zoekwoord</span>
+            </button>
+            <button type="button" class="step" data-state="todo">
+              <span class="step-dot"><span class="step-num">3</span><svg class="step-check h-2.5 w-2.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M16.7 5.3a1 1 0 010 1.4l-8 8a1 1 0 01-1.4 0l-4-4a1 1 0 011.4-1.4L8 12.58l7.3-7.3a1 1 0 011.4 0z" clip-rule="evenodd"/></svg></span>
+              <span class="step-text">aanbevelingen</span>
+            </button>
           </div>
           <div id="progress-bar" class="progress-track hidden"><span></span></div>
         </div>
@@ -132,29 +157,29 @@
           <div id="result-output">
             <div class="mx-auto max-w-2xl px-1 py-6 sm:py-10">
               <span class="pill pill-info">nog geen analyse</span>
-              <h3 class="mt-3 text-xl font-bold tracking-tight">Je contentbriefing verschijnt hier<span class="text-pm-cyan">.</span></h3>
+              <h3 class="mt-3 text-xl font-bold tracking-tight">Je focus check verschijnt hier<span class="text-pm-cyan">.</span></h3>
               <p class="mt-2 max-w-md text-sm leading-6 text-pm-muted">
-                Vul de doel-URL en het zoekwoord in. De tool haalt de echte Google-top 10 op, leest die pagina's en zet ze naast de jouwe. Elke suggestie komt met de concurrentkoppen waar hij op gebaseerd is.
+                Vul de doel-URL en het focus zoekwoord in. De tool haalt de Google-top 10 op, beoordeelt of je pagina bij de zoekintentie past en levert daarna pas aanbevelingen. Elke conclusie komt met de bron.
               </p>
               <ol class="mt-7 grid gap-3 sm:grid-cols-2">
                 <li class="card flex gap-3 p-4">
                   <span class="field-badge hex">1</span>
-                  <span><span class="block text-sm font-bold">Dekkingsgraad</span><span class="block text-xs leading-5 text-pm-muted">Woorden en dekking versus de Google-top 10.</span></span>
+                  <span><span class="block text-sm font-bold">Intent check</span><span class="block text-xs leading-5 text-pm-muted">Past het doel van je pagina bij de top 10?</span></span>
                 </li>
                 <li class="card flex gap-3 p-4">
                   <span class="field-badge hex">2</span>
-                  <span><span class="block text-sm font-bold">Ontbrekende koppen</span><span class="block text-xs leading-5 text-pm-muted">H2's en H3's die concurrenten wél hebben.</span></span>
+                  <span><span class="block text-sm font-bold">Focus zoekwoord</span><span class="block text-xs leading-5 text-pm-muted">Behouden, of een beter zoekwoord uit Search Console.</span></span>
                 </li>
                 <li class="card flex gap-3 p-4">
                   <span class="field-badge hex">3</span>
-                  <span><span class="block text-sm font-bold">Semantische termen</span><span class="block text-xs leading-5 text-pm-muted">Woorden die op jouw pagina ontbreken.</span></span>
+                  <span><span class="block text-sm font-bold">Mapping en optimalisatie</span><span class="block text-xs leading-5 text-pm-muted">Secondary, supporting, H1, title, meta en eerste alinea.</span></span>
                 </li>
                 <li class="card flex gap-3 p-4">
                   <span class="field-badge hex">4</span>
-                  <span><span class="block text-sm font-bold">Mensen vragen ook</span><span class="block text-xs leading-5 text-pm-muted">FAQ's om als blok toe te voegen.</span></span>
+                  <span><span class="block text-sm font-bold">Content gap</span><span class="block text-xs leading-5 text-pm-muted">Ontbrekende koppen, termen en vragen, met bron.</span></span>
                 </li>
               </ol>
-              <p class="mt-6 text-xs text-pm-muted">Elke suggestie krijgt een kopieerknop; de hele samenvatting kopieer je als markdown.</p>
+              <p class="mt-6 text-xs text-pm-muted">Elke suggestie krijgt een kopieerknop; het hele rapport kopieer je als markdown in de opbouw van onze focus keyword-documenten.</p>
             </div>
           </div>
         </div>
@@ -182,8 +207,9 @@
     <div class="space-y-4" aria-hidden="true">
       <div class="card p-5">
         <div class="shimmer h-3 w-24"></div>
-        <div class="mt-4 grid gap-3 sm:grid-cols-3">
-          <div class="shimmer h-16"></div><div class="shimmer h-16"></div><div class="shimmer h-16"></div>
+        <div class="shimmer mt-4 h-14"></div>
+        <div class="mt-4 grid gap-3 sm:grid-cols-2">
+          <div class="shimmer h-20"></div><div class="shimmer h-20"></div>
         </div>
       </div>
       <div class="card p-5 space-y-3">

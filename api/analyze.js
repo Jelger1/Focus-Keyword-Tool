@@ -1,256 +1,74 @@
 /**
  * POST /api/analyze
  *
- * Content gap-analyse tegen de echte Google-top 10:
+ * Stap 1 en 2 van de tool, en bij een match ook stap 3A:
  *
- *   1. Doelpagina ophalen en meten.
- *   2. De organische top 10 voor het zoekwoord ophalen via Serper (Google NL).
- *   3. Die pagina's parallel ophalen en op dezelfde manier meten.
- *   4. De code telt welke termen bij meerdere concurrenten voorkomen.
- *   5. Claude groepeert concurrentkoppen tot onderwerpen, kiest inhoudelijke
- *      termen uit de getelde lijst en schrijft antwoordrichtingen bij echte vragen.
- *   6. De code controleert elke bron die Claude citeert (lib/compare.js).
+ *   1. Doelpagina, SERP (Ahrefs) en zoekwoordcijfers tegelijk ophalen; daarna
+ *      de top 10 parallel ophalen en op dezelfde manier meten.
+ *   2. Intent check: de code meet de verdeling van paginatypes, Claude oordeelt
+ *      of de pagina bij de SERP past, de code controleert de geciteerde posities.
+ *   3A. Match: zoekwoordideeën (Ahrefs), termen tellen, vragen verzamelen, twee
+ *      Claude-calls naast elkaar (onderwerpen en woordkeuze), de code controleert
+ *      elke bron (lib/compare.js). Het antwoord is het complete rapport.
+ *   3B. Geen match: het antwoord stopt na de intent check; de frontend biedt
+ *      dan de herfocus aan (api/refocus.js).
  *
  * Sleutels leven alleen hier, nooit in de browser.
  */
 
-import Anthropic from '@anthropic-ai/sdk';
 import { fetchPage, fail } from '../lib/page.js';
-import { fetchSerp, SERP_PROVIDER } from '../lib/serp.js';
-import { fetchCompetitors, topicHeadings, termCandidates, collectQuestions, buildReport } from '../lib/compare.js';
+import { chooseSerpProvider, fetchSerp, describeSerpProvider } from '../lib/serp.js';
+import { fetchKeywordOverview, fetchKeywordIdeas } from '../lib/ahrefs.js';
+import { createClient, askClaude, describeClaudeError } from '../lib/claude.js';
+import {
+  fetchCompetitors, termCandidates, collectQuestions, buildReport, mappingCandidates, serpSummary, pageSummary,
+} from '../lib/compare.js';
+import { measureSerp, keywordPlacement, INTENT_SYSTEM_PROMPT, INTENT_SCHEMA, buildIntentMessage, verifyIntent } from '../lib/intent.js';
+import {
+  GAP_TOPICS_SYSTEM_PROMPT, GAP_TOPICS_SCHEMA, buildGapTopicsMessage,
+  GAP_TERMS_SYSTEM_PROMPT, GAP_TERMS_SCHEMA, buildGapTermsMessage,
+} from '../lib/gap.js';
+import { describePageType } from '../lib/pagetype.js';
+import { normalize } from '../lib/text.js';
+import { clientKey, withinRateLimit } from '../lib/ratelimit.js';
 
-// --- Instellingen ------------------------------------------------------------
-
-const MODEL = 'claude-opus-5';
-
-/**
- * 'medium': in de test scheelde 'low' maar acht seconden op vijftig — de
- * wachttijd zit in de lengte van de JSON, niet in de denkdiepte.
- */
-const EFFORT = 'medium';
-const MAX_TOKENS = 16_000;
-
-const MAX_TARGET_SAMPLE_CHARS = 12_000;
 const MAX_KEYWORD_CHARS = 120;
 
 /** Onder dit aantal vergeleken concurrenten is er geen patroon te herkennen. */
 const MIN_COMPETITORS = 2;
 
-// Best-effort rate limit. Serverless draait meerdere instances, dus dit is geen
-// harde garantie — het vangt vooral dubbelklikken en losgeslagen scripts.
+/** Na zoveel herfocusrondes stopt de tool en kiest de marketeer zelf. */
+const MAX_ROUNDS = 2;
+
 const RATE_LIMIT_MAX = 20;
-const RATE_LIMIT_WINDOW_MS = 10 * 60 * 1000;
-const recentRequests = new Map();
 
-// --- Claude: groeperen, kiezen, formuleren ------------------------------------
+const ORIGIN_SOURCES = new Set(['handmatig', 'gsc', 'ahrefs', 'ai']);
 
-const SYSTEM_PROMPT = `Je bent een senior SEO-strateeg. Je voert een content gap-analyse uit op échte data: de organische Google-topresultaten (Nederland) voor een zoekwoord, met per resultaat de koppen die op die pagina staan.
-
-Je krijgt:
-- de doelpagina: koppen en een groot deel van de tekst;
-- de concurrenten, genummerd [1], [2], ..., met titel, snippet en hun koppen;
-- een lijst kandidaat-termen die de analysetool in de concurrentpagina's telde, met het aantal concurrenten dat de term gebruikt;
-- een genummerde lijst vragen uit "Mensen vragen ook" en uit concurrentkoppen.
-
-Taken:
-1. Zoekintentie: leid af uit de titels en snippets van de resultaten wat de zoeker wil.
-2. Onderwerpen: groepeer concurrentkoppen die hetzelfde onderwerp behandelen, ook als ze anders geformuleerd zijn. Neem een onderwerp alleen op als het bij minstens twee verschillende concurrenten voorkomt. Geef per onderwerp:
-   - een kop zoals die op de doelpagina mag komen: concreet, Nederlands, zonder het zoekwoord er kunstmatig in te proppen;
-   - de bronnen: per concurrentnummer de kop LETTERLIJK zoals die in de input staat. De tool controleert elke bron en gooit onderwerpen weg zonder geldige bron bij twee concurrenten. Parafraseer dus nooit.
-   - of de doelpagina het onderwerp al behandelt: "kop" (eigen tussenkop, ook anders geformuleerd), "tekst" (inhoudelijk in de lopende tekst, zonder kop) of "ontbreekt". Kijk naar betekenis, niet naar losse woorden; bij twijfel kies je de hogere dekking.
-   Neem ook onderwerpen op die de doelpagina al goed behandelt: de marketeer wil zien wat er wél staat.
-3. Termen: kies uit de kandidatenlijst 10 tot 25 termen die inhoudelijk bij het onderwerp horen: vaktermen, productsoorten, regelgeving, kosten- en opbrengstbegrippen, alternatieven. Sla algemene woorden, navigatie, merknamen van individuele concurrenten en varianten van hetzelfde begrip over. Neem de term letterlijk over uit de lijst.
-4. Vragen: geef per vraagnummer in één zin de richting van een goed antwoord, en of de doelpagina de vraag al beantwoordt.
-
-Regels:
-- Alles in het Nederlands, je-vorm.
-- Koppen als "Klantenservice", "Gerelateerde artikelen" of "Nieuwsbrief" horen bij de site, niet bij het onderwerp: negeer ze.
-- Verzin geen cijfers, prijzen of keurmerken.`;
-
-const COVERAGE = { type: 'string', enum: ['kop', 'tekst', 'ontbreekt'] };
-
-/** Het schema dwingt de vorm af; de inhoud toetst lib/compare.js tegen de gemeten data. */
-const OUTPUT_SCHEMA = {
-  type: 'object',
-  properties: {
-    searchIntent: { type: 'string', description: 'Eén zin: wat wil de zoeker bereiken?' },
-    intentType: { type: 'string', enum: ['informatief', 'commercieel', 'transactioneel', 'navigatie'] },
-    topics: {
-      type: 'array',
-      items: {
-        type: 'object',
-        properties: {
-          heading: { type: 'string', description: 'De kop zoals hij op de doelpagina mag komen.' },
-          level: { type: 'string', enum: ['H2', 'H3'] },
-          why: { type: 'string', description: 'Eén zin: waarom dit onderwerp in de topresultaten terugkomt.' },
-          sources: {
-            type: 'array',
-            items: {
-              type: 'object',
-              properties: {
-                result: { type: 'integer', description: 'Concurrentnummer uit de input.' },
-                heading: { type: 'string', description: 'De kop letterlijk zoals in de input.' },
-              },
-              required: ['result', 'heading'],
-              additionalProperties: false,
-            },
-          },
-          coverage: { ...COVERAGE, description: 'Behandelt de doelpagina dit al?' },
-          subheadings: {
-            type: 'array',
-            items: { type: 'string' },
-            description: 'Nul tot drie H3-suggesties, gebaseerd op wat de concurrenten eronder behandelen.',
-          },
-        },
-        required: ['heading', 'level', 'why', 'sources', 'coverage', 'subheadings'],
-        additionalProperties: false,
-      },
-    },
-    terms: {
-      type: 'array',
-      items: {
-        type: 'object',
-        properties: {
-          term: { type: 'string', description: 'Letterlijk uit de kandidatenlijst.' },
-          context: { type: 'string', description: 'Korte uitleg waar deze term thuishoort.' },
-        },
-        required: ['term', 'context'],
-        additionalProperties: false,
-      },
-    },
-    questions: {
-      type: 'array',
-      items: {
-        type: 'object',
-        properties: {
-          index: { type: 'integer', description: 'Vraagnummer uit de input.' },
-          angle: { type: 'string', description: 'In één zin: wat het antwoord moet raken.' },
-          coverage: { ...COVERAGE, description: 'Beantwoordt de doelpagina deze vraag al?' },
-        },
-        required: ['index', 'angle', 'coverage'],
-        additionalProperties: false,
-      },
-    },
-  },
-  required: ['searchIntent', 'intentType', 'topics', 'terms', 'questions'],
-  additionalProperties: false,
-};
-
-function buildUserMessage({ keyword, target, compared, candidates, questions }) {
-  const lines = [
-    '# Zoekwoord',
-    keyword,
-    '',
-    '# Doelpagina',
-    `URL: ${target.url}`,
-    target.title && `Titel: ${target.title}`,
-    `Woordenaantal: ${target.wordCount}`,
-    '',
-    '## Koppen',
-    target.headings.length
-      ? target.headings.map((heading) => `${heading.level}: ${heading.text}`).join('\n')
-      : '(geen koppen gevonden)',
-    '',
-    '## Tekst (begin)',
-    target.text.slice(0, MAX_TARGET_SAMPLE_CHARS),
-    '',
-    '# Concurrenten uit de Google-top 10',
-  ];
-
-  compared.forEach((competitor, index) => {
-    lines.push(
-      '',
-      `## [${index + 1}] positie ${competitor.position} · ${competitor.domain}`,
-      `Titel: ${competitor.title}`,
-      competitor.snippet && `Snippet: ${competitor.snippet}`,
-      `Woordenaantal: ${competitor.wordCount}`,
-      'Koppen:',
-      ...topicHeadings(competitor.page).map((heading) => `- ${heading.level}: ${heading.text}`)
-    );
-  });
-
-  lines.push(
-    '',
-    '# Kandidaat-termen (term — aantal concurrenten dat hem gebruikt — staat al op doelpagina?)',
-    ...candidates.map((candidate) => `- ${candidate.term} — ${candidate.usedBy} — ${candidate.present ? 'ja' : 'nee'}`),
-    '',
-    '# Vragen',
-    ...(questions.length
-      ? questions.map((item, index) => `${index + 1}. ${item.question} (${item.source})`)
-      : ['(geen vragen gevonden)'])
-  );
-
-  return lines.filter((line) => line !== false && line !== undefined && line !== '').join('\n');
-}
-
-async function askClaude(client, input) {
-  const request = {
-    model: MODEL,
-    max_tokens: MAX_TOKENS,
-    system: [{ type: 'text', text: SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } }],
-    thinking: { type: 'adaptive' },
-    output_config: {
-      effort: EFFORT,
-      format: { type: 'json_schema', schema: OUTPUT_SCHEMA },
-    },
-    messages: [{ role: 'user', content: buildUserMessage(input) }],
+/** Waar het zoekwoord vandaan komt: handmatig ingevuld, of gekozen in een herfocusronde. */
+function readOrigin(raw) {
+  const source = ORIGIN_SOURCES.has(raw?.source) ? raw.source : 'handmatig';
+  const round = Math.min(Math.max(Number.parseInt(raw?.round, 10) || 0, 0), 9);
+  return {
+    source,
+    round,
+    previousKeyword: String(raw?.previousKeyword || '').slice(0, MAX_KEYWORD_CHARS),
+    why: String(raw?.why || '').slice(0, 600),
   };
-
-  // Weigert het model een aanvraag (zeldzaam bij SEO-analyses), dan handelt
-  // Anthropic dat server-side af op een ander model. Die beta staat niet op elk
-  // account aan — vandaar de retry zonder.
-  let message;
-  try {
-    message = await client.beta.messages.create({
-      ...request,
-      betas: ['server-side-fallback-2026-07-01'],
-      fallbacks: 'default',
-    });
-  } catch (error) {
-    const rejectedBeta = error?.status === 400 && /beta|fallback/i.test(error?.message || '');
-    if (!rejectedBeta) throw error;
-    console.warn('Server-side fallback niet beschikbaar, opnieuw zonder.');
-    message = await client.messages.create(request);
-  }
-
-  if (message.stop_reason === 'refusal') {
-    throw fail(502, 'refused', 'Het model heeft deze analyse geweigerd. Controleer het zoekwoord.');
-  }
-  if (message.stop_reason === 'max_tokens') {
-    throw fail(502, 'truncated', 'Het antwoord van het model werd afgekapt. Probeer het opnieuw.');
-  }
-
-  const json = message.content.find((block) => block.type === 'text')?.text;
-  if (!json) throw fail(502, 'empty_response', 'Het model gaf geen bruikbaar antwoord terug.');
-
-  try {
-    return { data: JSON.parse(json), usage: message.usage };
-  } catch {
-    throw fail(502, 'bad_json', 'Het antwoord van het model was geen geldige JSON.');
-  }
 }
 
-// --- Rate limit ---------------------------------------------------------------
-
-function clientKey(req) {
-  const forwarded = req.headers['x-forwarded-for'];
-  if (typeof forwarded === 'string' && forwarded.length > 0) return forwarded.split(',')[0].trim();
-  return req.socket?.remoteAddress || 'onbekend';
+/**
+ * Aanvullende Ahrefs-data mag de analyse niet laten vallen: mislukt de call,
+ * dan gaat de analyse door zonder en zegt de UI dat de cijfers ontbreken.
+ */
+function optional(promise, label) {
+  return promise.then(
+    (value) => ({ value, error: null }),
+    (error) => {
+      console.warn(`${label} niet opgehaald:`, error.message);
+      return { value: null, error: error.message };
+    }
+  );
 }
-
-function withinRateLimit(key) {
-  const now = Date.now();
-  const timestamps = (recentRequests.get(key) || []).filter((t) => now - t < RATE_LIMIT_WINDOW_MS);
-  if (timestamps.length >= RATE_LIMIT_MAX) {
-    recentRequests.set(key, timestamps);
-    return false;
-  }
-  timestamps.push(now);
-  recentRequests.set(key, timestamps);
-  return true;
-}
-
-// --- Handler ------------------------------------------------------------------
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -272,20 +90,20 @@ export default async function handler(req, res) {
     }
     // Zonder echte Google-resultaten valt er niets te vergelijken. Bewust geen
     // terugval op geschatte data: dan zou het rapport metingen suggereren die er niet zijn.
-    if (!process.env.SERPER_API_KEY) {
-      throw fail(500, 'no_serp_key', 'SERPER_API_KEY is niet ingesteld op de server.');
-    }
+    const serpAccess = chooseSerpProvider(process.env);
+    const ahrefsKey = process.env.AHREFS_API_KEY || null;
 
-    if (!withinRateLimit(clientKey(req))) {
+    if (!withinRateLimit(clientKey(req), RATE_LIMIT_MAX)) {
       throw fail(429, 'rate_limited', 'Te veel analyses achter elkaar. Probeer het over een paar minuten opnieuw.');
     }
 
     const body = typeof req.body === 'string' ? safeParse(req.body) : req.body || {};
     const url = String(body.url ?? '').trim();
     const keyword = String(body.keyword ?? '').trim();
+    const origin = readOrigin(body.origin);
 
     if (!url || !keyword) {
-      throw fail(400, 'missing_input', 'Vul zowel de doel-URL als het primaire zoekwoord in.');
+      throw fail(400, 'missing_input', 'Vul zowel de doel-URL als het focus zoekwoord in.');
     }
     if (keyword.length > MAX_KEYWORD_CHARS) {
       throw fail(413, 'keyword_too_long', 'Gebruik één zoekwoord, geen hele zin.');
@@ -293,11 +111,22 @@ export default async function handler(req, res) {
 
     const startedAt = Date.now();
 
-    // Doelpagina en SERP tegelijk: ze hangen niet van elkaar af.
-    const [target, serp] = await Promise.all([
+    // Doelpagina, SERP en zoekwoordcijfers tegelijk: ze hangen niet van elkaar af.
+    const [target, serp, keywordLookup] = await Promise.all([
       fetchPage(url),
-      fetchSerp(keyword, { apiKey: process.env.SERPER_API_KEY }),
+      fetchSerp(keyword, serpAccess),
+      ahrefsKey
+        ? optional(fetchKeywordOverview([keyword], { apiKey: ahrefsKey }), 'Zoekwoordcijfers')
+        : Promise.resolve({ value: null, error: null }),
     ]);
+    const keywordInfo = keywordLookup.value ? keywordLookup.value.get(normalize(keyword)) || null : null;
+
+    // De zoekwoordideeën zijn pas nodig bij een match, maar starten nu al: dan
+    // staan ze klaar zodra de intent check klaar is. Bij een mismatch kost dat
+    // een paar honderd Ahrefs-units, tegenover een halve minuut wachten bij een match.
+    const ideasPromise = ahrefsKey
+      ? optional(fetchKeywordIdeas(keyword, { apiKey: ahrefsKey }), 'Zoekwoordideeën')
+      : Promise.resolve({ value: [], error: null });
 
     const serpResults = await fetchCompetitors(serp.organic, target);
     const compared = serpResults.filter((result) => result.status === 'vergeleken');
@@ -310,47 +139,113 @@ export default async function handler(req, res) {
       );
     }
 
+    const providerLabel = describeSerpProvider(serp.provider, serp.updatedAt);
+    const measured = measureSerp({ serp, serpResults });
+    const placement = keywordPlacement(target, keyword);
+
+    // --- Stap 2: intent check ------------------------------------------------------
+    const client = createClient();
+    const intentAnswer = await askClaude(client, {
+      system: INTENT_SYSTEM_PROMPT,
+      schema: INTENT_SCHEMA,
+      message: buildIntentMessage({ keyword, target, serp, serpResults, keywordInfo, measured, providerLabel }),
+      maxTokens: 4_000,
+      effort: 'medium',
+    });
+    const intent = verifyIntent(intentAnswer.data, { serp });
+
+    const base = {
+      keyword,
+      origin,
+      generatedAt: new Date().toISOString(),
+      serp: serpSummary(serp, serpResults, providerLabel),
+      page: pageSummary(target),
+      keywordInfo,
+      keywordInfoError: keywordLookup.error,
+      measured,
+      intent,
+      placement,
+      maxRounds: MAX_ROUNDS,
+    };
+
+    if (!intent.match) {
+      log('Intent check: geen match', startedAt, {
+        zoekwoord: keyword,
+        ronde: origin.round,
+        mismatch: intent.mismatch?.kind,
+        input_tokens: intentAnswer.usage?.input_tokens,
+        output_tokens: intentAnswer.usage?.output_tokens,
+      });
+      res.status(200).json({
+        stage: 'intent',
+        ...base,
+        nextStep: origin.round >= MAX_ROUNDS ? 'handmatig' : 'refocus',
+      });
+      return;
+    }
+
+    // --- Stap 3A: content gap, keyword mapping en optimalisatie --------------------------
+    const ideas = await ideasPromise;
+    const mapping = mappingCandidates(ideas.value || [], serp, keyword);
     const candidates = termCandidates(compared.map((competitor) => competitor.page), target, keyword);
     const questions = collectQuestions(serp.peopleAlsoAsk, compared);
+    const pageTypeOf = (raw) => describePageType(raw)?.label || raw;
 
-    const client = new Anthropic(); // leest ANTHROPIC_API_KEY uit de omgeving
-    const { data, usage } = await askClaude(client, { keyword, target, compared, candidates, questions });
+    // Twee calls naast elkaar: onderwerpen (met de koppen van alle concurrenten) en
+    // woordkeuze (termen, mapping, nieuwe teksten). Samen in één call duurde ruim
+    // twee minuten; zo is het de helft.
+    const [topicsAnswer, termsAnswer] = await Promise.all([
+      askClaude(client, {
+        system: GAP_TOPICS_SYSTEM_PROMPT,
+        schema: GAP_TOPICS_SCHEMA,
+        message: buildGapTopicsMessage({ keyword, target, compared, questions, intent, pageTypeOf }),
+        maxTokens: 16_000,
+        effort: 'medium',
+      }),
+      askClaude(client, {
+        system: GAP_TERMS_SYSTEM_PROMPT,
+        schema: GAP_TERMS_SCHEMA,
+        message: buildGapTermsMessage({ keyword, target, compared, candidates, intent, placement, mappingCandidates: mapping, pageTypeOf }),
+        maxTokens: 8_000,
+        effort: 'medium',
+      }),
+    ]);
 
     const report = buildReport({
-      keyword, target, serp, serpResults, compared, candidates, questions, model: data, provider: SERP_PROVIDER,
+      keyword, target, serp, serpResults, compared, candidates, questions,
+      model: { ...topicsAnswer.data, ...termsAnswer.data },
+      mappingCandidates: mapping, placement, providerLabel,
     });
 
-    // Verschijnt in Vercel onder Deployments -> Functions -> Logs.
-    console.log(
-      'Analyse afgerond:',
-      JSON.stringify({
-        seconden: Math.round((Date.now() - startedAt) / 100) / 10,
-        zoekwoord: keyword,
-        vergeleken: compared.length,
-        mislukt: serpResults.filter((result) => result.status === 'mislukt').length,
-        onderwerpen: report.coverage.topicsTotal,
-        onderwerpen_zonder_bron: report.quality.droppedTopics,
-        dekking: report.coverage.score,
-        input_tokens: usage?.input_tokens,
-        output_tokens: usage?.output_tokens,
-      })
-    );
+    const usage = [intentAnswer, topicsAnswer, termsAnswer].map((answer) => answer.usage || {});
+    log('Analyse afgerond', startedAt, {
+      zoekwoord: keyword,
+      ronde: origin.round,
+      vergeleken: compared.length,
+      mislukt: serpResults.filter((result) => result.status === 'mislukt').length,
+      onderwerpen: report.coverage.topicsTotal,
+      onderwerpen_zonder_bron: report.quality.droppedTopics,
+      mapping_afgekeurd: report.quality.droppedMapping,
+      ideeen: (ideas.value || []).length,
+      dekking: report.coverage.score,
+      input_tokens: usage.reduce((sum, item) => sum + (item.input_tokens || 0), 0),
+      output_tokens: usage.reduce((sum, item) => sum + (item.output_tokens || 0), 0),
+    });
 
-    res.status(200).json(report);
+    res.status(200).json({ stage: 'compleet', ...base, ...report, ideasError: ideas.error });
   } catch (error) {
     if (error.code && error.status) {
       res.status(error.status).json({ error: error.message, code: error.code });
       return;
     }
-
     console.error('Analyse mislukt:', error);
-    const message = error?.status === 401
-      ? 'De API-key wordt geweigerd. Controleer ANTHROPIC_API_KEY.'
-      : error?.status === 429
-        ? 'Anthropic heeft een rate limit bereikt. Probeer het zo opnieuw.'
-        : error?.message || 'Onbekende fout.';
-    res.status(502).json({ error: message, code: 'analysis_failed' });
+    res.status(502).json({ error: describeClaudeError(error), code: 'analysis_failed' });
   }
+}
+
+/** Verschijnt in Vercel onder Deployments -> Functions -> Logs. */
+function log(label, startedAt, details) {
+  console.log(`${label}:`, JSON.stringify({ seconden: Math.round((Date.now() - startedAt) / 100) / 10, ...details }));
 }
 
 function safeParse(value) {

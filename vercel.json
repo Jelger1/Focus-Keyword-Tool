@@ -2,7 +2,10 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "functions": {
     "api/analyze.js": {
-      "maxDuration": 180
+      "maxDuration": 300
+    },
+    "api/refocus.js": {
+      "maxDuration": 120
     }
   }
 }

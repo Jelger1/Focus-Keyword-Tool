@@ -1,11 +1,12 @@
 {
-  "name": "seo-content-gap-analyzer",
-  "version": "1.0.0",
+  "name": "keyword-focus-intent-check",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
-  "description": "Interne SEO-tool: vergelijkt een pagina met de organische topresultaten en brengt ontbrekende koppen, termen en FAQ's in kaart.",
+  "description": "Interne SEO-tool: controleert of een pagina past bij de zoekintentie van het focus zoekwoord, zoekt anders een beter zoekwoord (Search Console of Ahrefs) en levert daarna de content gap, keyword mapping en optimalisaties.",
   "scripts": {
-    "dev": "vercel dev"
+    "dev": "vercel dev",
+    "test": "node test/run.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.125.0"

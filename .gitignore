@@ -7,3 +7,6 @@ node_modules/
 
 # Lokale back-ups van VS Code (Local History), bevatten ook kopieën van .env.local
 .history/
+
+# Video en plan uit de /brag-sessie: geen onderdeel van de tool
+brag-output/
