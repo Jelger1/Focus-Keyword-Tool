@@ -30,6 +30,7 @@ import { normalize } from '../lib/text.js';
 import { clientKey, withinRateLimit } from '../lib/ratelimit.js';
 import { passwordOk } from '../lib/auth.js';
 import { readRegion } from '../lib/region.js';
+import { factBase, groundRefocus, factCheckSummary, logRemovedClaims } from '../lib/facts.js';
 import { createProgress } from '../lib/progress.js';
 
 const MAX_KEYWORD_CHARS = 120;
@@ -148,16 +149,20 @@ export default async function handler(req, res) {
     progress.throwIfGone();
     progress.step('kiezen', 'active', 'Claude zoekt een zoekwoord dat bij de pagina past');
     const client = createClient();
+    const refocusMessage = buildRefocusMessage({
+      target, rejectedKeyword, intent, rows: rows.slice(0, MAX_ROWS_FOR_MODEL), metrics, source: list.source, gsc: list.gsc, region,
+    });
     const answer = await askClaude(client, {
       system: REFOCUS_SYSTEM_PROMPT,
       schema: REFOCUS_SCHEMA,
-      message: buildRefocusMessage({
-        target, rejectedKeyword, intent, rows: rows.slice(0, MAX_ROWS_FOR_MODEL), metrics, source: list.source, gsc: list.gsc, region,
-      }),
+      message: refocusMessage,
       maxTokens: 4_000,
       effort: 'medium',
     });
-    const verified = verifyRefocus(answer.data, rows);
+    // Eerst de cijfers in de uitleg, daarna de keuze tegen de lijst.
+    const facts = groundRefocus(answer.data, factBase(refocusMessage));
+    logRemovedClaims('herfocus', facts.removed);
+    const verified = verifyRefocus(facts.model, rows);
     progress.step('kiezen', 'done', verified.pick
       ? `Gevonden in de lijst: "${verified.pick.keyword}"`
       : 'Niets passends in de lijst: Claude stelt zelf zoekwoorden voor');
@@ -203,6 +208,7 @@ export default async function handler(req, res) {
       keuze: choice?.keyword || null,
       keuze_bron: choice?.source || null,
       voorstellen: proposals.length,
+      cijfers_weggelaten: facts.removed.length,
       input_tokens: answer.usage?.input_tokens,
       output_tokens: answer.usage?.output_tokens,
     });
@@ -216,6 +222,7 @@ export default async function handler(req, res) {
       region: region.id,
       round,
       rejectedKeyword,
+      factCheck: factCheckSummary(facts.removed),
       rowCount: rows.length,
       rows: rows.slice(0, MAX_ROWS_IN_RESPONSE).map((row) => {
         const found = metrics.get(normalize(row.query));

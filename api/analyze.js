@@ -38,6 +38,7 @@ import { fetchPageQueries, GSC_STATUS } from '../lib/searchconsole.js';
 import { sourceFlags, gscSummary, pageInsight } from '../lib/hybrid.js';
 import { readRegion } from '../lib/region.js';
 import { createProgress } from '../lib/progress.js';
+import { factBase, groundIntent, groundGapTopics, groundGapTerms, factCheckSummary, logRemovedClaims } from '../lib/facts.js';
 import { normalize } from '../lib/text.js';
 import { clientKey, withinRateLimit } from '../lib/ratelimit.js';
 import { passwordOk } from '../lib/auth.js';
@@ -181,14 +182,17 @@ export default async function handler(req, res) {
     progress.throwIfGone();
     progress.step('intent', 'active', 'Claude beoordeelt of je pagina past bij de zoekintentie');
     const client = createClient();
+    const intentMessage = buildIntentMessage({ keyword, target, serp, serpResults, keywordInfo, measured, providerLabel, gsc, gscInsight, region });
     const intentAnswer = await askClaude(client, {
       system: INTENT_SYSTEM_PROMPT,
       schema: INTENT_SCHEMA,
-      message: buildIntentMessage({ keyword, target, serp, serpResults, keywordInfo, measured, providerLabel, gsc, gscInsight, region }),
+      message: intentMessage,
       maxTokens: 4_000,
       effort: 'medium',
     });
-    const intent = verifyIntent(intentAnswer.data, { serp });
+    // Eerst de cijfers: een getal dat niet in het bericht stond, haalt het rapport niet.
+    const intentFacts = groundIntent(intentAnswer.data, factBase(intentMessage));
+    const intent = verifyIntent(intentFacts.model, { serp });
     progress.step('intent', 'done', intent.match ? 'Match: de pagina past bij dit zoekwoord' : 'Geen match: de pagina past niet bij dit zoekwoord');
 
     const base = {
@@ -209,7 +213,9 @@ export default async function handler(req, res) {
       source: flags.source,
       gsc_error: flags.gsc_error,
       gsc: { ...gscSummary(gsc), insight: gscInsight },
+      factCheck: factCheckSummary(intentFacts.removed),
     };
+    logRemovedClaims('intent check', intentFacts.removed);
 
     if (!intent.match) {
       log('Intent check: geen match', startedAt, {
@@ -241,28 +247,35 @@ export default async function handler(req, res) {
     // Twee calls naast elkaar: onderwerpen (met de koppen van alle concurrenten) en
     // woordkeuze (termen, mapping, nieuwe teksten). Samen in één call duurde ruim
     // twee minuten; zo is het de helft.
+    const topicsMessage = buildGapTopicsMessage({ keyword, target, compared, questions, intent, pageTypeOf, region });
+    const termsMessage = buildGapTermsMessage({ keyword, target, compared, candidates, intent, placement, mappingCandidates: mapping, pageTypeOf, region });
     const [topicsAnswer, termsAnswer] = await Promise.all([
       askClaude(client, {
         system: GAP_TOPICS_SYSTEM_PROMPT,
         schema: GAP_TOPICS_SCHEMA,
-        message: buildGapTopicsMessage({ keyword, target, compared, questions, intent, pageTypeOf, region }),
+        message: topicsMessage,
         maxTokens: 16_000,
         effort: 'medium',
       }),
       askClaude(client, {
         system: GAP_TERMS_SYSTEM_PROMPT,
         schema: GAP_TERMS_SCHEMA,
-        message: buildGapTermsMessage({ keyword, target, compared, candidates, intent, placement, mappingCandidates: mapping, pageTypeOf, region }),
+        message: termsMessage,
         maxTokens: 8_000,
         effort: 'medium',
       }),
     ]);
 
+    // Elk antwoord tegen zijn eigen bericht: een call kan alleen cijfers kennen die hij zelf kreeg.
+    const topicsFacts = groundGapTopics(topicsAnswer.data, factBase(topicsMessage));
+    const termsFacts = groundGapTerms(termsAnswer.data, factBase(termsMessage));
+    logRemovedClaims('content gap', [...topicsFacts.removed, ...termsFacts.removed]);
     const report = buildReport({
       keyword, target, serp, serpResults, compared, candidates, questions,
-      model: { ...topicsAnswer.data, ...termsAnswer.data },
+      model: { ...topicsFacts.model, ...termsFacts.model },
       mappingCandidates: mapping, placement, providerLabel,
     });
+    const factCheck = factCheckSummary(intentFacts.removed, topicsFacts.removed, termsFacts.removed);
     progress.step('aanbevelingen', 'done', `${report.coverage.topicsTotal} onderwerpen en ${report.coverage.termsTotal} termen gecontroleerd tegen de bronnen`);
 
     const usage = [intentAnswer, topicsAnswer, termsAnswer].map((answer) => answer.usage || {});
@@ -275,6 +288,7 @@ export default async function handler(req, res) {
       onderwerpen: report.coverage.topicsTotal,
       onderwerpen_zonder_bron: report.quality.droppedTopics,
       mapping_afgekeurd: report.quality.droppedMapping,
+      cijfers_weggelaten: factCheck.removed,
       ideeen: (ideas.value || []).length,
       gsc: gsc.status,
       dekking: report.coverage.score,
@@ -283,7 +297,7 @@ export default async function handler(req, res) {
     });
 
     const finalFlags = sourceFlags(gsc, { ahrefsUsed: ahrefsInIntent || (ideas.value || []).length > 0 });
-    progress.send(200, { stage: 'compleet', ...base, ...report, ...finalFlags, ideasError: ideas.error });
+    progress.send(200, { stage: 'compleet', ...base, ...report, ...finalFlags, factCheck, ideasError: ideas.error });
   } catch (error) {
     if (error.code === 'client_gone') {
       console.log('Analyse afgebroken: de gebruiker startte iets anders.');

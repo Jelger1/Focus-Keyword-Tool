@@ -1416,6 +1416,7 @@ function markdownSources(lines, report, method) {
     `- Regio: Google ${region.label}, teksten in het ${region.language}; uitleg in het Nederlands`,
     `- Search Console: ${gsc?.status === 'ok' ? `gekoppeld, ${gscWhen(gsc, report)}` : gsc ? GSC_REASONS[gsc.status] || 'niet gebruikt' : 'niet gebruikt in dit rapport'}`,
     ...(report.quality ? [`- Gecontroleerd: ${report.quality.droppedTopics ?? 0} onderwerpen en ${report.quality.droppedMapping ?? 0} mapping-zoekwoorden weggelaten omdat het bewijs ontbrak`] : []),
+    ...(report.factCheck ? [`- Cijfercontrole: ${factCheckText(report.factCheck)}`] : []),
     '',
     '---',
     '',

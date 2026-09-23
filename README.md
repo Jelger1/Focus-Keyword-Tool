@@ -35,6 +35,7 @@ Functions als back-end. Geen build-stap.
 | `lib/hybrid.js` | Search Console en Ahrefs samenvoegen, en de vlaggen `source` en `gsc_error`. |
 | `lib/keywordsources.js` | De zoekwoordlijst voor de herfocus: export, of Search Console plus Ahrefs met terugval. |
 | `lib/claude.js` | De gedeelde Claude-aanroep. |
+| `lib/facts.js` | Feitencontrole: elk cijfer in de tekst van Claude moet in de meegestuurde data staan. |
 | `lib/auth.js` | Het optionele wachtwoord, in constante tijd vergeleken. |
 | `lib/region.js` | Regio en taal: Nederland (Nederlands) of Verenigde Staten (Engels). |
 | `lib/progress.js` | Echte voortgang tijdens een analyse, als NDJSON-stroom. |
@@ -74,6 +75,13 @@ Het rapport volgt de opbouw van onze focus keyword-documenten: beoordeling, focu
 zoekwoord (behouden of nieuw), keyword mapping, optimalisatie, aanbevelingen met
 SERP-bewijs, niet doen, samenvatting. Kopieerbaar als markdown en te downloaden als
 pdf.
+
+**Geen verzonnen cijfers.** Elke prompt verbiedt cijfers die niet in de meegestuurde
+data staan, rekensommen en kennis van buiten het bericht. Daarna controleert de code
+het: elk getal in de tekst van Claude (zoekvolume, vertoningen, positie, jaartal,
+prijs, percentage) moet in het bericht staan dat Claude kreeg. Een zin met een ander
+getal verdwijnt, een voorgestelde paginatekst met zo'n getal helemaal. De bijlage van
+het rapport meldt hoeveel er is weggelaten.
 
 **Pdf voor de klant.** "Download als pdf" opent het afdrukvenster van de browser; kies
 daar "Opslaan als PDF". De pdf is hetzelfde rapport als op het scherm, als A4 met

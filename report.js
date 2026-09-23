@@ -1205,6 +1205,7 @@ function bronnenCard(report) {
       label: 'Gecontroleerd',
       value: `${report.quality.droppedTopics ?? 0} onderwerpen en ${report.quality.droppedMapping ?? 0} mapping-zoekwoorden weggelaten omdat het bewijs ontbrak`,
     },
+    report.factCheck && { label: 'Cijfercontrole', value: factCheckText(report.factCheck) },
   ]));
   body.append(sources);
 
@@ -1213,6 +1214,16 @@ function bronnenCard(report) {
   method.append(legendLine(report, { label: false }));
   body.append(method);
   return wrapper;
+}
+
+/**
+ * Wat de feitencontrole deed (lib/facts.js): elk cijfer in de tekst van Claude is
+ * vergeleken met de data die Claude kreeg. Ook "niets weggelaten" is informatie.
+ */
+function factCheckText(factCheck) {
+  if (!factCheck.removed) return 'elk cijfer in de tekst van Claude staat in de meegestuurde data van Search Console, Ahrefs of de pagina’s';
+  const numbers = factCheck.numbers?.length ? ` (${factCheck.numbers.join(', ')})` : '';
+  return `${factCheck.removed} ${factCheck.removed === 1 ? 'zin' : 'zinnen'} van Claude weggelaten met een cijfer dat niet in de meegestuurde data stond${numbers}`;
 }
 
 /** De top 10 waarmee vergeleken is. Waar een kolom wegvalt, staat de inhoud onder de titel. */

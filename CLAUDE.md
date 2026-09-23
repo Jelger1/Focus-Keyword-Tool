@@ -60,6 +60,7 @@ Functions.
 | `lib/hybrid.js` | Search Console en Ahrefs samenvoegen, bron per zoekwoordrij, de vlaggen `source` en `gsc_error`. |
 | `lib/keywordsources.js` | De zoekwoordlijst voor de herfocus: export, of Search Console plus Ahrefs met terugval. |
 | `lib/claude.js` | De gedeelde Claude-aanroep (model, schema-output, server-side terugval). |
+| `lib/facts.js` | De feitenregels voor elke prompt, en de controle dat elk cijfer van Claude in het meegestuurde bericht staat. |
 | `lib/auth.js` | Het optionele wachtwoord, in constante tijd vergeleken. |
 | `lib/region.js` | Regio en taal (NL, US): Ahrefs-country, Serper gl/hl, Accept-Language, Search Console-land, taalinstructie voor Claude. |
 | `lib/progress.js` | Echte voortgang als NDJSON-stroom, heartbeats, en stoppen als de gebruiker afhaakt. |
@@ -103,7 +104,14 @@ Regels:
     getelde of opgehaalde lijsten, nieuwe teksten alleen voor plekken waar de
     meting zegt dat het zoekwoord ontbreekt; `buildReport()` gooit de rest weg;
   - herfocus: een keuze moet letterlijk in de lijst staan; een AI-voorstel telt pas
-    als Ahrefs er zoekvolume voor kent.
+    als Ahrefs er zoekvolume voor kent;
+  - cijfers, bij elke call: elke systeemprompt bevat `FACT_RULES` (alleen cijfers
+    uit het bericht, niets uitrekenen, ontbrekend is ontbrekend, geen kennis van
+    buiten het bericht), en `lib/facts.js` legt daarna elk getal in de tekst van
+    Claude naast het bericht dat die call kreeg. Een zin met een getal dat daar niet
+    in staat verdwijnt; een nieuwe paginatekst (kop, H1, title, meta, intro) met zo'n
+    getal verdwijnt helemaal. Het rapport meldt hoeveel er weg is (`factCheck`).
+    Een nieuwe Claude-call krijgt dezelfde twee lagen.
   Houd die scheiding intact.
 - **Elke externe fetch heeft een timeout** en een nette foutboodschap in het
   Nederlands; een onbereikbare URL mag de tool nooit laten hangen.

@@ -21,6 +21,13 @@ import { buildIntentMessage } from '../lib/intent.js';
 import { collectKeywordRows } from '../lib/keywordsources.js';
 import { passwordOk } from '../lib/auth.js';
 import { mergeKeywordLists, sourceFlags, pageInsight, isMeasured } from '../lib/hybrid.js';
+import {
+  numberReadings, factBase, unsupportedNumbers, groundText, groundIntent, groundGapTopics, groundGapTerms, groundRefocus,
+  factCheckSummary, FACT_RULES,
+} from '../lib/facts.js';
+import { INTENT_SYSTEM_PROMPT } from '../lib/intent.js';
+import { GAP_TOPICS_SYSTEM_PROMPT, GAP_TERMS_SYSTEM_PROMPT } from '../lib/gap.js';
+import { REFOCUS_SYSTEM_PROMPT } from '../lib/refocus.js';
 
 let passed = 0;
 const queue = [];
@@ -566,6 +573,99 @@ test('termCandidates: Engelse opvulwoorden alleen weg bij regio US, vaktermen bl
   }));
   const nlTerms = termCandidates(nl, target, 'conversie', { region: REGIONS.nl }).map((c) => c.term);
   for (const term of ['landing page', 'checkout', 'duidelijke call']) assert.ok(nlTerms.includes(term), `${term} ontbreekt`);
+});
+
+// --- Feiten: elk cijfer van Claude moet in het bericht staan ----------------------------
+
+test('facts: getallen in Nederlandse en Engelse notatie hebben dezelfde waarde', () => {
+  assert.deepEqual(numberReadings('5.100'), [5100, 5.1]);
+  assert.deepEqual(numberReadings('6,2'), [6.2]);
+  assert.deepEqual(numberReadings('1.234,5'), [1234.5]);
+  const base = factBase('Zoekvolume: 5.100 per maand · gemiddelde positie 6,2 · 1.234 vertoningen');
+  // Engels geschreven door het model, Nederlands meegestuurd door de tool: gedekt.
+  assert.deepEqual(unsupportedNumbers('5,100 searches, position 6.2, 1,234 impressions', base), []);
+  assert.deepEqual(unsupportedNumbers('Na 2027 vervalt de regeling en je dekt 46% van de onderwerpen.', base), ['2027', '46']);
+});
+
+test('facts: een zin met een verzonnen cijfer verdwijnt, de rest blijft', () => {
+  const base = factBase('Volume 5.100 per maand. Koppen: "Wat verandert er na de afschaffing van de salderingsregeling?"');
+  const log = [];
+  const text = groundText('Bijna alle concurrenten leggen uit wat salderen oplevert. Na 2027 vervalt de regeling. Het volume is 5.100 per maand.', base, log, 'summary');
+  assert.equal(text, 'Bijna alle concurrenten leggen uit wat salderen oplevert. Het volume is 5.100 per maand.');
+  assert.deepEqual(log.map((item) => item.numbers), [['2027']]);
+  // Decimalen en duizendtallen breken een zin niet op.
+  assert.equal(groundText('Je staat op 6,2 gemiddeld. Het volume is 5.100.', factBase('6,2 5.100'), [], 'x'), 'Je staat op 6,2 gemiddeld. Het volume is 5.100.');
+});
+
+test('groundIntent: argument met een verzonnen cijfer valt weg, het oordeel blijft', () => {
+  const base = factBase('Zoekvolume: 5.100 per maand · positie 3');
+  const { model, removed } = groundIntent({
+    match: true,
+    page: { summary: 'Een webshop.' },
+    serp: { summary: 'De zoeker wil kopen.' },
+    reasons: [{ text: 'Je staat al op positie 3.', positions: [3] }, { text: 'Er zijn 12.000 zoekopdrachten per maand.', positions: [] }],
+    mismatch: { kind: 'geen', explanation: '', direction: '' },
+  }, base);
+  assert.equal(model.match, true);
+  assert.deepEqual(model.reasons.map((reason) => reason.text), ['Je staat al op positie 3.']);
+  assert.equal(removed.length, 1);
+  assert.deepEqual(factCheckSummary(removed), { removed: 1, numbers: ['12.000'] });
+});
+
+test('groundGapTopics: kop met een verzonnen jaartal wordt de letterlijke concurrentkop', () => {
+  const base = factBase('Koppen: Salderen en terugleveren | Wat verandert er na de afschaffing van de salderingsregeling?');
+  const { model } = groundGapTopics({
+    topics: [
+      { heading: 'Salderingsregeling, terugleveren en wat er na 2027 verandert', why: 'Bijna iedereen legt het uit.', advice: 'Voeg een blok toe.', subheadings: ['Wat kost 1 paneel in 2026?', 'Zelf verbruiken'], sources: [{ result: 1, heading: 'Salderen en terugleveren' }], coverage: 'ontbreekt' },
+      { heading: 'Prijzen in 2026', why: 'x', advice: 'y', subheadings: [], sources: [{ result: 2, heading: 'Prijzen in 2026' }], coverage: 'ontbreekt' },
+    ],
+    questions: [{ index: 1, angle: 'Noem de kosten. Reken op 400 euro per paneel.', coverage: 'ontbreekt' }],
+    avoid: [{ text: 'Geen 10 jaar garantie beloven.', results: [1] }],
+    summary: 'Pak de saldering aan.',
+  }, base);
+  assert.equal(model.topics.length, 1);
+  assert.equal(model.topics[0].heading, 'Salderen en terugleveren');
+  assert.deepEqual(model.topics[0].subheadings, ['Zelf verbruiken']);
+  assert.equal(model.questions[0].angle, 'Noem de kosten.');
+  assert.equal(model.avoid.length, 0);
+  assert.equal(model.summary, 'Pak de saldering aan.');
+});
+
+test('groundGapTerms: nieuwe paginatekst met een verzonnen cijfer valt helemaal weg', () => {
+  const base = factBase('Tekst van de pagina: 100% gerecycled papier, 5.100 per maand');
+  const { model, removed } = groundGapTerms({
+    terms: [{ term: 'papier', context: 'Kern van het aanbod.' }],
+    keywordMapping: { secondary: [{ keyword: 'paper', why: 'Zelfde intentie, 5.100 per maand.' }], supporting: [], variants: [], brand: [] },
+    placement: { h1: 'Papier op maat', title: '', metaDescription: 'Bestel vandaag, 30 dagen retour.', intro: '100% gerecycled papier voor je verpakking.' },
+  }, base);
+  assert.equal(model.placement.h1, 'Papier op maat');
+  assert.equal(model.placement.metaDescription, '');
+  assert.equal(model.placement.intro, '100% gerecycled papier voor je verpakking.');
+  assert.equal(model.keywordMapping.secondary[0].why, 'Zelfde intentie, 5.100 per maand.');
+  assert.deepEqual(removed.map((item) => item.field), ['placement.metaDescription']);
+});
+
+test('groundRefocus: uitleg met een verzonnen volume verdwijnt, de keuze blijft voor de lijstcontrole', () => {
+  const base = factBase('1. "zonnepanelen kopen": [Search Console] 38.500 vertoningen');
+  const { model } = groundRefocus({
+    pageSummary: 'Een webshop.',
+    found: true,
+    pick: { keyword: 'zonnepanelen kopen', why: 'Past bij de webshop. De pagina krijgt 38.500 vertoningen.' },
+    alternatives: [{ keyword: 'x', why: 'Heeft 9.900 zoekopdrachten.', fit: 'matig' }],
+    proposals: [],
+    rejected: '',
+  }, base);
+  assert.equal(model.pick.keyword, 'zonnepanelen kopen');
+  assert.equal(model.pick.why, 'Past bij de webshop. De pagina krijgt 38.500 vertoningen.');
+  assert.equal(model.alternatives[0].why, '');
+});
+
+test('prompts: alle vier de Claude-aanroepen hebben de harde feitregels', () => {
+  for (const prompt of [INTENT_SYSTEM_PROMPT, GAP_TOPICS_SYSTEM_PROMPT, GAP_TERMS_SYSTEM_PROMPT, REFOCUS_SYSTEM_PROMPT]) {
+    assert.ok(prompt.includes(FACT_RULES));
+  }
+  assert.match(FACT_RULES, /letterlijk in het bericht/);
+  assert.match(FACT_RULES, /Nooit schatten/);
 });
 
 await runAll();
