@@ -25,7 +25,7 @@ Functions als back-end. Geen build-stap.
 | `api/refocus.js` | Een beter zoekwoord zoeken: Search Console plus Ahrefs, of een zelf ingeladen export. |
 | `lib/ahrefs.js` | Alle Ahrefs-calls: SERP-overzicht, zoekwoordcijfers, zoekwoordideeën, rankende zoekwoorden per URL. |
 | `lib/serp.js` | Provider-schakelaar: Ahrefs (standaard) of Serper (terugval). |
-| `lib/page.js` | Pagina's ophalen en uitlezen, voor doelpagina én concurrenten identiek. |
+| `lib/page.js` | Pagina's ophalen en alleen de hoofdinhoud uitlezen (zonder menu, footer, cookiebalk of winkelwagen), voor doelpagina én concurrenten identiek. |
 | `lib/intent.js` | De intent check: meten, de Claude-instructie en de controle van het oordeel. |
 | `lib/gap.js` | De content gap-instructie en het schema voor Claude. |
 | `lib/compare.js` | Termen tellen, vragen verzamelen, keyword mapping en elke bewering van Claude controleren. |
@@ -47,7 +47,8 @@ Functions als back-end. Geen build-stap.
 1. **Verzamelen.** De doelpagina, de Google-top 10 volgens [Ahrefs](https://ahrefs.com)
    (met per resultaat het paginatype en het topzoekwoord) en de cijfers van het
    zoekwoord (volume, moeilijkheid, parent topic, intenties) komen tegelijk binnen.
-   De top 10 wordt daarna opgehaald en op dezelfde manier gemeten als de doelpagina.
+   De top 10 wordt daarna opgehaald en op dezelfde manier gemeten als de doelpagina:
+   alleen de hoofdinhoud telt, dus menu's, footers, cookiebalken en winkelwagens niet.
 2. **Intent check.** De code telt de paginatypes in de top 10; Claude beoordeelt of
    het doel van de pagina bij de SERP past en citeert posities als bewijs; de code
    gooit posities weg die niet bestaan. De UI toont meting en interpretatie apart.

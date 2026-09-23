@@ -26,6 +26,7 @@ import {
   factCheckSummary, FACT_RULES,
 } from '../lib/facts.js';
 import { INTENT_SYSTEM_PROMPT } from '../lib/intent.js';
+import { readPage } from '../lib/page.js';
 import { GAP_TOPICS_SYSTEM_PROMPT, GAP_TERMS_SYSTEM_PROMPT } from '../lib/gap.js';
 import { REFOCUS_SYSTEM_PROMPT } from '../lib/refocus.js';
 
@@ -666,6 +667,80 @@ test('prompts: alle vier de Claude-aanroepen hebben de harde feitregels', () => 
   }
   assert.match(FACT_RULES, /letterlijk in het bericht/);
   assert.match(FACT_RULES, /Nooit schatten/);
+});
+
+// --- Pagina uitlezen: alleen de hoofdinhoud -----------------------------------------------
+
+const SHOP_HTML = `<!doctype html><html><head><title>Zonnepanelen kopen | Solar Shop</title>
+<meta content="Koop zonnepanelen online." name="description"></head><body>
+<ul class="hidden-data hidden"><li>94720183235</li><li>ja</li><li>live</li></ul>
+<div class="topbar usp-bar">Bel 033-4617740 · Gratis verzending</div>
+<header id="top"><a href="/">Solar Shop</a><div class="account">Inloggen Mijn account</div>
+<div class="mini-cart">Winkelwagen Uw winkelwagen is leeg</div><nav><a>Zonnepanelen</a><a>Omvormers</a></nav></header>
+<div id="cookie-consent">Deze website maakt gebruik van cookies. Akkoord?</div>
+<section class="intro"><h1>Zonnepanelen kopen</h1>
+<p class="author-line">Door Jan · Bijgewerkt op 1 maart 2026</p>
+<p>Bij Solar Shop koop je zonnepanelen van topmerken zoals AEG en Aiko, scherp geprijsd en snel geleverd. <a class="read-more">Toon meer</a></p>
+<p>Kies uit glas-glas en full black panelen voor elk dak.</p></section>
+<section id="collection"><div class="filters">Filter Wis alle filters Sorteer Laagste prijs</div>
+<form class="product-list"><div class="card"><h3>AEG 450 Wp paneel</h3><div class="card-footer">€ 129 per stuk, op voorraad, morgen in huis</div></div>
+<div class="card"><h3>Aiko 485 Wp Gen3</h3><div class="card-footer">€ 149 per stuk, op voorraad, morgen in huis</div></div>
+<p>Alle panelen hebben 25 jaar productgarantie en worden geleverd met montagemateriaal naar keuze, zodat je direct aan de slag kunt met je installatie.</p>
+<p>Twijfel je over het aantal panelen? Onze opbrengstcalculator rekent het voor je uit op basis van je dak en je verbruik.</p></form>
+<form class="newsletter-signup"><h2>Nieuwsbrief</h2>Schrijf je in</form></section>
+<footer><h4>Klantenservice</h4>Bel ons op 033-4617740</footer></body></html>`;
+
+test('readPage: geen titel, header, winkelwagen, cookies of telefoonnummer in de tekst', () => {
+  const page = readPage(SHOP_HTML);
+  assert.equal(page.title, 'Zonnepanelen kopen | Solar Shop');
+  assert.equal(page.metaDescription, 'Koop zonnepanelen online.');
+  assert.equal(page.h1, 'Zonnepanelen kopen');
+  for (const junk of ['Solar Shop Zonnepanelen', 'Winkelwagen', 'Inloggen', 'cookies', '033-4617740', '94720183235', 'Wis alle filters', 'Nieuwsbrief', 'Klantenservice', 'Toon meer']) {
+    assert.ok(!page.text.includes(junk), `"${junk}" hoort niet in de tekst`);
+  }
+  assert.ok(page.text.startsWith('Zonnepanelen kopen'));
+  // De productlijst staat in een formulier en in "card-footer"s: dat is wel inhoud.
+  assert.ok(page.text.includes('AEG 450 Wp paneel') && page.text.includes('€ 129 per stuk'));
+  assert.deepEqual(page.headings.map((heading) => heading.text), ['Zonnepanelen kopen', 'AEG 450 Wp paneel', 'Aiko 485 Wp Gen3']);
+});
+
+test('readPage: de eerste alinea is de eerste echte alinea na de H1, zonder auteursregel of knoptekst', () => {
+  const page = readPage(SHOP_HTML);
+  assert.equal(page.intro, 'Bij Solar Shop koop je zonnepanelen van topmerken zoals AEG en Aiko, scherp geprijsd en snel geleverd. Kies uit glas-glas en full black panelen voor elk dak.');
+  // En de meting gebruikt die alinea, niet de titel: daar staat "kopen" wél in, in de alinea niet ("koop").
+  assert.equal(keywordPlacement(page, 'zonnepanelen kopen').intro.status, 'ontbreekt');
+  assert.equal(keywordPlacement(page, 'zonnepanelen kopen').title.status, 'letterlijk');
+});
+
+test('readPage: kiest <main>, en een kop in een artikel is inhoud', () => {
+  const html = `<html><body><div class="site-header"><a>Home</a><a>Over ons</a><a>Contact</a></div>
+<main><article><header class="article-header"><h1>Wat kosten zonnepanelen?</h1></header>
+<p>Een set van tien panelen kost inclusief installatie een paar duizend euro, afhankelijk van merk en dak.</p>
+<div class="section-header"><h2>Terugverdientijd</h2></div><p>De terugverdientijd hangt af van je verbruik en de stroomprijs, meestal enkele jaren.</p>
+<div class="cookieconsent-optout"><p>Accepteer de cookies om deze inhoud te bekijken</p></div></article>
+<aside><h3>Lees ook</h3><a>Thuisbatterij</a></aside></main><div class="footer">© 2026</div></body></html>`;
+  const page = readPage(html);
+  assert.deepEqual(page.headings.map((heading) => heading.text), ['Wat kosten zonnepanelen?', 'Terugverdientijd']);
+  assert.ok(!/Home|Over ons|Lees ook|©|cookies/.test(page.text));
+  assert.match(page.intro, /^Een set van tien panelen/);
+});
+
+test('readPage: React-streaming in <div hidden id="S:..."> is gewone inhoud, een echt verborgen blok niet', () => {
+  const html = `<html><body><div id="S:3" hidden><h1>Vind een installateur</h1><p>Vergelijk de beste zonnepanelen-installateurs in jouw regio op prijs, reviews en ervaring.</p></div>
+<div hidden>Geheime beheertekst die niemand ziet</div><div style="display: none">Ook onzichtbaar</div></body></html>`;
+  const page = readPage(html);
+  assert.equal(page.h1, 'Vind een installateur');
+  assert.ok(page.text.includes('Vergelijk de beste'));
+  assert.ok(!/Geheime|onzichtbaar/.test(page.text));
+});
+
+test('readPage: rommelige HTML zonder <body> en zonder inhoudsblok valt terug op de hele pagina', () => {
+  const html = `<div id="header"><a>Sign In</a> Cart (0) Call 877-826-9379</div><div id="info"><div class="product-header"><h1>Kraft Paper System</h1></div>
+<p>Converts kraft paper rolls into crumpled cushioning and void fill for packing and shipping.</p></div><div id="footer">Contact us</div>`;
+  const page = readPage(html);
+  assert.equal(page.h1, 'Kraft Paper System');
+  assert.ok(!/Sign In|Cart|877|Contact us/.test(page.text));
+  assert.match(page.intro, /^Converts kraft paper rolls/);
 });
 
 await runAll();

@@ -50,7 +50,7 @@ Functions.
 | `api/refocus.js` | Scenario B: een beter zoekwoord zoeken. |
 | `lib/ahrefs.js` | Alle Ahrefs-calls. Velden, timeouts en foutmeldingen staan alleen hier. |
 | `lib/serp.js` | Provider-schakelaar (Ahrefs standaard, Serper terugval). Wisselen van provider = alleen dit bestand. |
-| `lib/page.js` | Pagina's ophalen en uitlezen, voor doelpagina én concurrenten identiek. |
+| `lib/page.js` | Pagina's ophalen en alleen de hoofdinhoud uitlezen (zonder menu, footer, cookiebalk of winkelwagen), voor doelpagina én concurrenten identiek. |
 | `lib/intent.js` | Meten (paginatypes, topzoekwoorden, eigen positie, plaatsing van het zoekwoord), de intent-instructie, de controle van het oordeel. |
 | `lib/gap.js` | Instructie en schema van de content gap-call. |
 | `lib/compare.js` | Termen tellen, vragen verzamelen, mapping-kandidaten, en elke bewering van Claude controleren (`buildReport`). |
@@ -113,6 +113,14 @@ Regels:
     getal verdwijnt helemaal. Het rapport meldt hoeveel er weg is (`factCheck`).
     Een nieuwe Claude-call krijgt dezelfde twee lagen.
   Houd die scheiding intact.
+- **Alleen de hoofdinhoud telt.** `readPage()` in `lib/page.js` leest pagina's met
+  `node-html-parser` en gooit sitechrome weg voordat er iets geteld wordt: menu,
+  header en footer van de site, cookiebalken, winkelwagen, inloggen, kleine
+  formulieren, verborgen blokken en knopteksten. De eerste alinea is het eerste
+  echte tekstblok na de H1, zonder auteursregel, en stopt bij de volgende kop. Tekst
+  als "winkelwagen" of een telefoonnummer hoort nooit in een rapport. Meetcode leest
+  pagina's alleen via `readPage()`; parse geen HTML met regexen. Nieuwe
+  uitleesregels krijgen een controle in `test/run.js`.
 - **Elke externe fetch heeft een timeout** en een nette foutboodschap in het
   Nederlands; een onbereikbare URL mag de tool nooit laten hangen.
 - **Search Console is een aanvulling, nooit een voorwaarde (smart fallback).** Het
