@@ -26,7 +26,7 @@ const output = document.getElementById('result-output');
 const actions = document.getElementById('result-actions');
 const statusBadge = document.getElementById('status-badge');
 const progressBar = document.getElementById('progress-bar');
-const stepButtons = [...document.querySelectorAll('#steps .step')];
+const stepItems = [...document.querySelectorAll('#steps .step')];
 
 const passwordOverlay = document.getElementById('password-overlay');
 const passwordForm = document.getElementById('password-form');
@@ -42,12 +42,16 @@ const STORAGE = {
   draft: 'focus-draft',
   report: 'focus-report',
   refocus: 'focus-refocus',
+  gsc: 'focus-gsc',
 };
 
 /** Zelfde herkenning als in lib/page.js, zodat de hint klopt met wat de server doet. */
 const URL_PATTERN = /^(https?:\/\/\S+|([a-z0-9-]+\.)+[a-z]{2,}(:\d+)?([/?#]\S*)?)$/i;
 
 const MAX_GSC_BYTES = 1_000_000;
+
+/** Grotere exports bewaren we niet in de browser: localStorage heeft maar een paar MB. */
+const MAX_STORED_GSC_CHARS = 400_000;
 
 const SOURCE_LABELS = {
   handmatig: 'opgegeven door jou',
@@ -75,6 +79,12 @@ let lastRefocus = null;
 let appPassword = storageGet(STORAGE.password) || '';
 let isLoading = false;
 let timer = null;
+
+/** De laatst ingeladen Search Console-export: een tweede ronde gaat over dezelfde pagina. */
+let lastGscText = storageGet(STORAGE.gsc) || '';
+
+/** Wat er opnieuw moet gebeuren nadat de marketeer het wachtwoord heeft ingevuld. */
+let retryAfterPassword = null;
 
 // --- Kleine DOM-helpers --------------------------------------------------------
 
@@ -242,14 +252,16 @@ form.addEventListener('submit', (event) => {
   runAnalysis({ url, keyword, origin: { source: 'handmatig', round: 0 } });
 });
 
-/** Stap 1 en 2 (en bij een match 3A): één aanroep van /api/analyze. */
-async function runAnalysis({ url, keyword, origin }) {
+/**
+ * Stap 1 en 2 (en bij een match 3A): één aanroep van /api/analyze.
+ *
+ * `keepOutput`: na een herfocus blijft de kaart met het gekozen zoekwoord in
+ * beeld en komt het skelet eronder. Zo lees je de onderbouwing terwijl de
+ * tweede analyse loopt, in plaats van dat hij meteen verdwijnt.
+ */
+async function runAnalysis({ url, keyword, origin }, { keepOutput = false } = {}) {
   if (isLoading) return;
-
-  urlField.value = url;
-  keywordField.value = keyword;
-  updateFieldState();
-  storageSet(STORAGE.draft, JSON.stringify(FIELDS.map((field) => field.value)));
+  retryAfterPassword = null;
 
   setLoading(true, origin.round > 0 ? `analyse met "${keyword}"` : 'bezig met analyseren');
   setSteps([
@@ -257,7 +269,12 @@ async function runAnalysis({ url, keyword, origin }) {
     { state: origin.round > 0 ? 'done' : 'todo', text: 'focus zoekwoord' },
     { state: 'todo', text: 'aanbevelingen' },
   ]);
-  showSkeleton();
+  if (keepOutput) {
+    actions.replaceChildren();
+    output.append(skeletonNode());
+  } else {
+    showSkeleton();
+  }
   resultScroll.scrollTop = 0;
   if (!isDesktop()) resultCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
@@ -265,13 +282,22 @@ async function runAnalysis({ url, keyword, origin }) {
     const report = await postJson('/api/analyze', { url, keyword, origin });
     lastReport = report;
     storageSet(STORAGE.report, JSON.stringify(report));
+
+    // De velden volgen pas na een geslaagde analyse het nieuwe zoekwoord. Mislukt
+    // de heranalyse, dan staat de invoer nog op wat de marketeer zelf koos.
+    urlField.value = url;
+    keywordField.value = keyword;
+    updateFieldState();
+    storageSet(STORAGE.draft, JSON.stringify(FIELDS.map((field) => field.value)));
+
     renderReport(report);
-    if (report.stage === 'compleet') setStatus('done', 'Klaar');
-    else setStatus('warn', 'Geen match');
+    if (report.stage === 'compleet') setStatus('done', 'klaar');
+    else setStatus('warn', 'geen match');
   } catch (error) {
     if (error.code === 'auth_required') {
-      askForPassword(error.message);
-      showEmpty();
+      if (lastReport) renderReport(lastReport);
+      else showEmpty();
+      askForPassword(error.message, () => runAnalysis({ url, keyword, origin }));
     } else {
       renderError(error);
     }
@@ -284,14 +310,17 @@ async function runAnalysis({ url, keyword, origin }) {
 async function runRefocus({ source, gscText }) {
   const report = lastReport;
   if (!report || report.stage !== 'intent' || isLoading) return;
+  retryAfterPassword = null;
+  if (source === 'gsc' && gscText) rememberGsc(gscText);
 
   setLoading(true, 'beter zoekwoord zoeken');
+  renderReport(report, { refocusBusy: true });
   setSteps([
     { state: 'done', text: 'intent check: geen match' },
     { state: 'active', text: 'focus zoekwoord zoeken' },
     { state: 'todo', text: 'aanbevelingen' },
   ]);
-  renderReport(report, { refocusBusy: true });
+  scrollToRefocus();
 
   let result;
   try {
@@ -306,21 +335,31 @@ async function runRefocus({ source, gscText }) {
   } catch (error) {
     setLoading(false);
     if (error.code === 'auth_required') {
-      askForPassword(error.message);
       renderReport(report);
+      askForPassword(error.message, () => runRefocus({ source, gscText }));
       return;
     }
     renderReport(report, { refocusError: error });
+    scrollToRefocus();
     return;
   }
   setLoading(false);
 
   lastRefocus = result;
   storageSet(STORAGE.refocus, JSON.stringify(result));
-  renderReport(report);
 
-  if (result.choice) {
-    await runAnalysis({
+  if (!result.choice) {
+    renderReport(report);
+    scrollToRefocus();
+    return;
+  }
+
+  // Alleen de kaart met de keuze blijft staan; de intent check van het afgekeurde
+  // zoekwoord hoeft niet meer boven de nieuwe analyse te hangen.
+  output.className = 'space-y-4';
+  output.replaceChildren(refocusCard(report, { autoStart: true }));
+  await runAnalysis(
+    {
       url: report.page.url,
       keyword: result.choice.keyword,
       origin: {
@@ -329,20 +368,46 @@ async function runRefocus({ source, gscText }) {
         round: report.origin.round + 1,
         why: result.choice.why,
       },
-    });
-  }
+    },
+    { keepOutput: true }
+  );
+}
+
+function scrollToRefocus() {
+  document.getElementById('refocus-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function rememberGsc(text) {
+  lastGscText = text;
+  if (text.length <= MAX_STORED_GSC_CHARS) storageSet(STORAGE.gsc, text);
+  else storageRemove(STORAGE.gsc);
+}
+
+/** De herfocus die bij dit rapport hoort: die waarin dit zoekwoord gekozen werd. */
+function refocusFor(report) {
+  if (!lastRefocus?.choice) return null;
+  return lastRefocus.choice.keyword.toLowerCase() === report.keyword.toLowerCase() ? lastRefocus : null;
 }
 
 /** Knop waarmee de marketeer zelf een alternatief kiest. */
 function analyseWithButton(keyword, source, why, report) {
-  const button = el('button', 'btn btn-outline btn-xs');
+  const button = el('button', 'btn btn-outline btn-xs btn-wrap');
   button.type = 'button';
   button.textContent = `analyseer met "${keyword}"`;
+  // Tijdens een analyse uit: een tweede klik zou toch genegeerd worden.
+  button.dataset.busyDisable = '';
+  button.disabled = isLoading;
   button.addEventListener('click', () => {
     runAnalysis({
       url: report.page.url,
       keyword,
-      origin: { source, previousKeyword: lastRefocus?.rejectedKeyword || report.keyword, round: report.origin.round + 1, why: why || '' },
+      origin: {
+        source,
+        previousKeyword: lastRefocus?.rejectedKeyword || report.keyword,
+        // Een zelf gekozen alternatief telt als ronde, maar nooit verder dan de limiet.
+        round: Math.min(report.origin.round + 1, report.maxRounds),
+        why: why || '',
+      },
     });
   });
   return button;
@@ -369,6 +434,10 @@ function renderReport(report, options = {}) {
   output.replaceChildren(...cards);
   output.className = 'space-y-4';
   actions.replaceChildren(copyButton(() => toMarkdown(report), 'kopieer rapport', 'btn btn-outline btn-sm relative'));
+
+  // Tijdens de herfocus loopt er nog een aanvraag: voortgangsbalk en stappen
+  // blijven dan zoals runRefocus ze zette.
+  if (options.refocusBusy) return;
   progressBar.classList.add('hidden');
 
   if (report.stage === 'compleet') {
@@ -403,6 +472,14 @@ function intentCard(report) {
     const direction = el('p', 'mt-1 text-sm leading-6');
     direction.append(el('strong', null, 'Richting voor een beter zoekwoord: '), document.createTextNode(intent.mismatch.direction));
     verdict.append(direction);
+  }
+  // De vervolgstap staat onder de lange intentkaart; deze knop brengt je er direct.
+  if (report.stage === 'intent' && !intent.match) {
+    const jump = el('button', 'btn btn-outline btn-sm mt-3');
+    jump.type = 'button';
+    jump.textContent = report.nextStep === 'refocus' ? 'zoek een beter zoekwoord' : 'bekijk je opties';
+    jump.addEventListener('click', scrollToRefocus);
+    verdict.append(jump);
   }
   body.append(verdict);
 
@@ -465,11 +542,7 @@ function intentCard(report) {
     );
     metaRow(facts, 'Intentievlaggen (Ahrefs)', intentFlags(keywordInfo.intents));
   } else {
-    metaRow(
-      facts,
-      'Zoekvolume (Ahrefs)',
-      report.keywordInfoError ? `niet opgehaald: ${report.keywordInfoError}` : 'Ahrefs kent dit zoekwoord niet'
-    );
+    metaRow(facts, 'Zoekvolume (Ahrefs)', missingVolumeText(report));
   }
   metaRow(facts, 'Jouw pagina in de top 10', measured.ownPosition ? `ja, positie ${measured.ownPosition}` : 'nee');
   if (measured.topKeywords.length) {
@@ -487,6 +560,24 @@ function intentCard(report) {
 
   wrapper.append(body);
   return wrapper;
+}
+
+/**
+ * Kwamen er geen zoekwoordcijfers binnen, dan zeggen we dat, en niet dat Ahrefs
+ * het zoekwoord niet kent. Is het zoekwoord ook het topzoekwoord van een
+ * concurrent, dan staat het volume wél in de SERP-data; dat noemen we erbij.
+ */
+function missingVolumeText(report) {
+  const base = report.keywordInfoError
+    ? `niet opgehaald: ${report.keywordInfoError}`
+    : 'geen zoekwoordcijfers ontvangen van Ahrefs';
+  const wanted = sameKeyword(report.keyword);
+  const fromSerp = (report.measured?.topKeywords || []).find((entry) => sameKeyword(entry.keyword) === wanted && typeof entry.volume === 'number');
+  return fromSerp ? `${base}; als topzoekwoord in de SERP: ${fmt(fromSerp.volume)} per maand` : base;
+}
+
+function sameKeyword(value) {
+  return String(value || '').toLowerCase().replace(/\s+/g, ' ').trim();
 }
 
 function sideBox(title, pageType, intentType, summary, positions) {
@@ -507,8 +598,12 @@ function sideBox(title, pageType, intentType, summary, positions) {
 
 /** 2 (geen match). Een beter zoekwoord zoeken: het formulier, de bezig-staat of het resultaat. */
 function refocusCard(report, options = {}) {
-  const roundLabel = `Ronde ${report.origin.round + 1} van ${report.maxRounds}`;
+  const roundLabel = report.nextStep === 'refocus'
+    ? `Ronde ${report.origin.round + 1} van ${report.maxRounds}`
+    : `Limiet van ${report.maxRounds} rondes bereikt`;
   const { wrapper } = card('Beter zoekwoord zoeken', roundLabel);
+  wrapper.id = 'refocus-card';
+  wrapper.classList.add('scroll-mt-4');
   const body = el('div', 'p-5 space-y-4');
 
   if (report.origin.previousKeyword) {
@@ -518,12 +613,13 @@ function refocusCard(report, options = {}) {
   }
 
   const result = lastRefocus && lastRefocus.rejectedKeyword === report.keyword ? lastRefocus : null;
+  const earlier = previousRoundOptions(report);
 
   if (options.refocusBusy) {
     body.append(el('p', 'notice text-sm', 'Bezig met zoeken naar een passend zoekwoord. Dit duurt ongeveer een halve minuut.'));
     body.append(el('div', 'shimmer h-4 w-2/3'), el('div', 'shimmer h-4 w-1/2'));
   } else if (result) {
-    body.append(refocusResult(result, report));
+    body.append(refocusResult(result, report, { autoStart: options.autoStart }));
   } else if (report.nextStep === 'refocus') {
     if (options.refocusError) body.append(errorBox(options.refocusError));
     body.append(refocusForm(report));
@@ -532,18 +628,22 @@ function refocusCard(report, options = {}) {
       el(
         'p',
         'notice notice-warn text-sm leading-6',
-        `Na ${report.maxRounds} rondes is er nog geen zoekwoord gevonden dat bij de pagina past. Kies zelf een alternatief hieronder, vul een ander zoekwoord in, of pas de pagina aan zodat hij bij het zoekwoord past.`
+        `Na ${report.maxRounds} rondes is er nog geen zoekwoord gevonden dat bij de pagina past. ${
+          earlier.length ? 'Kies zelf een alternatief hieronder, vul' : 'Vul'
+        } een ander zoekwoord in, of pas de pagina aan zodat hij bij het zoekwoord past.`
       )
     );
   }
 
-  const earlier = previousRoundOptions(report);
   if (earlier.length && !options.refocusBusy && !result) {
     const block = el('div', 'space-y-2 border-t border-pm-line pt-4');
     block.append(sectionLabel('Alternatieven uit de vorige ronde'));
     const list = el('div', 'flex flex-wrap gap-2');
     earlier.forEach((item) => list.append(analyseWithButton(item.keyword, item.source, item.why, report)));
     block.append(list);
+    block.append(
+      details(`Bekijk de vorige herfocus (na "${lastRefocus.rejectedKeyword}")`, [refocusResult(lastRefocus, report, { done: true })])
+    );
     body.append(block);
   }
 
@@ -573,12 +673,13 @@ function refocusForm(report) {
     )
   );
 
-  let gscText = '';
+  let gscText = lastGscText;
 
   const drop = el('label', 'dropzone');
   const input = el('input', 'sr-only');
   input.type = 'file';
   input.accept = '.csv,.tsv,.txt,.json';
+  input.setAttribute('aria-label', 'Search Console-export kiezen');
   const dropText = el('span', 'block text-sm font-semibold', 'kies een bestand of sleep het hierheen');
   const dropHint = el('span', 'mt-1 block text-xs text-pm-muted', 'CSV, TSV of JSON uit Search Console, maximaal 1 MB');
   drop.append(input, dropText, dropHint);
@@ -588,6 +689,7 @@ function refocusForm(report) {
   textarea.setAttribute('aria-label', 'Search Console-export plakken');
 
   const error = el('p', 'hidden text-sm font-semibold text-pm-magenta');
+  error.setAttribute('role', 'alert');
 
   const submit = el('button', 'btn btn-primary btn-sm');
   submit.type = 'button';
@@ -636,6 +738,13 @@ function refocusForm(report) {
 
   submit.addEventListener('click', () => runRefocus({ source: 'gsc', gscText }));
   viaAhrefs.addEventListener('click', () => runRefocus({ source: 'ahrefs' }));
+
+  // Tweede ronde: de export van deze pagina staat al klaar, opnieuw inladen hoeft niet.
+  if (gscText) {
+    textarea.value = gscText;
+    dropText.textContent = 'de vorige export staat klaar';
+    drop.classList.add('is-filled');
+  }
   update();
 
   const buttons = el('div', 'flex flex-wrap items-center gap-2');
@@ -655,7 +764,11 @@ function refocusForm(report) {
   return box;
 }
 
-function refocusResult(result, report) {
+/**
+ * @param options.autoStart  de heranalyse met de keuze loopt nu
+ * @param options.done       terugblik op een afgeronde herfocus: geen startknoppen
+ */
+function refocusResult(result, report, options = {}) {
   const box = el('div', 'space-y-4');
   const listSource = result.source === 'ahrefs' ? 'ahrefs' : 'gsc';
 
@@ -677,10 +790,17 @@ function refocusResult(result, report) {
     if (result.choice.row?.position != null) pills.append(el('span', 'pill', `positie ${String(result.choice.row.position).replace('.', ',')}`));
     choice.append(pills);
     if (result.choice.why) choice.append(el('p', 'text-sm leading-6', result.choice.why));
-    const next = el('p', 'text-xs text-pm-muted');
-    next.append(document.createTextNode('De analyse met dit zoekwoord start automatisch. Niet gestart? '));
-    next.append(analyseWithButton(result.choice.keyword, result.choice.source, result.choice.why, report));
-    choice.append(next);
+    if (options.autoStart) {
+      choice.append(el('p', 'text-xs text-pm-muted', 'De analyse met dit zoekwoord loopt nu. Het rapport verschijnt hieronder.'));
+    } else if (!options.done) {
+      // Na een refresh of een mislukte heranalyse loopt er niets: dan starten we op verzoek.
+      const next = el('div', 'flex flex-wrap items-center gap-2 text-xs text-pm-muted');
+      next.append(
+        document.createTextNode('De analyse met dit zoekwoord is nog niet gestart.'),
+        analyseWithButton(result.choice.keyword, result.choice.source, result.choice.why, report)
+      );
+      choice.append(next);
+    }
     box.append(choice);
   } else {
     box.append(
@@ -696,51 +816,57 @@ function refocusResult(result, report) {
 
   if (result.rejected) box.append(el('p', 'text-sm leading-6 text-pm-muted', result.rejected));
 
+  const withButtons = !options.done;
   if (result.alternatives.length) {
-    box.append(candidateList('Alternatieven uit de lijst', result.alternatives, listSource, report));
+    box.append(candidateList('Alternatieven uit de lijst', result.alternatives, listSource, report, { withButtons }));
   }
   if (result.proposals.length) {
-    box.append(candidateList('Voorstellen van Claude (zoekvolume gecheckt bij Ahrefs)', result.proposals, 'ai', report));
+    box.append(candidateList('Voorstellen van Claude (zoekvolume gecheckt bij Ahrefs)', result.proposals, 'ai', report, { withButtons }));
   }
 
   if (result.rows.length) {
     const table = el('table', 'data-table');
     const head = el('thead');
     const headRow = el('tr');
-    ['Zoekwoord', 'Klikken', 'Vertoningen', 'Positie', 'Volume'].forEach((label) => headRow.append(el('th', null, label)));
+    // Op een smal scherm vallen klikken en volume weg: zoekwoord, vertoningen en positie passen dan.
+    [['Zoekwoord', ''], ['Klikken', 'hidden md:table-cell'], ['Vertoningen', ''], ['Positie', ''], ['Volume', 'hidden md:table-cell']]
+      .forEach(([label, className]) => headRow.append(el('th', className || null, label)));
     head.append(headRow);
     const rows = el('tbody');
     result.rows.forEach((row) => {
       const tr = el('tr');
       tr.append(
         el('td', 'break-anywhere', row.query),
-        el('td', 'tabular-nums', fmt(row.clicks)),
+        el('td', 'tabular-nums hidden md:table-cell', fmt(row.clicks)),
         el('td', 'tabular-nums', fmt(row.impressions)),
         el('td', 'tabular-nums', row.position != null ? String(row.position).replace('.', ',') : '—'),
-        el('td', 'tabular-nums', fmt(row.volume))
+        el('td', 'tabular-nums hidden md:table-cell', fmt(row.volume))
       );
       rows.append(tr);
     });
     table.append(head, rows);
     const wrap = el('div', 'table-wrap');
     wrap.append(table);
-    box.append(details(`Bekijk de ${result.rowCount} zoekwoorden uit de lijst (top ${result.rows.length})`, [wrap]));
+    const topNote = result.rowCount > result.rows.length ? ` (top ${result.rows.length})` : '';
+    box.append(details(`Bekijk de ${result.rowCount} zoekwoorden uit de lijst${topNote}`, [wrap]));
   }
 
-  const again = el('button', 'btn btn-quiet btn-xs');
-  again.type = 'button';
-  again.textContent = 'opnieuw met een andere export';
-  again.addEventListener('click', () => {
-    lastRefocus = null;
-    storageRemove(STORAGE.refocus);
-    renderReport(report);
-  });
-  box.append(again);
+  if (!options.done && !options.autoStart) {
+    const again = el('button', 'btn btn-quiet btn-xs');
+    again.type = 'button';
+    again.textContent = 'opnieuw met een andere export';
+    again.addEventListener('click', () => {
+      lastRefocus = null;
+      storageRemove(STORAGE.refocus);
+      renderReport(report);
+    });
+    box.append(again);
+  }
 
   return box;
 }
 
-function candidateList(title, items, source, report) {
+function candidateList(title, items, source, report, { withButtons = true } = {}) {
   const block = el('div', 'space-y-2');
   block.append(sectionLabel(title));
   const list = el('ul', 'space-y-2');
@@ -754,7 +880,8 @@ function candidateList(title, items, source, report) {
     else if (source === 'ai') left.append(el('span', 'pill pill-bad', 'geen volume bekend'));
     if (item.row?.impressions != null) left.append(el('span', 'pill', `${fmt(item.row.impressions)} vertoningen`));
     if (item.row?.position != null) left.append(el('span', 'pill', `positie ${String(item.row.position).replace('.', ',')}`));
-    top.append(left, analyseWithButton(item.keyword, source, item.why, report));
+    top.append(left);
+    if (withButtons) top.append(analyseWithButton(item.keyword, source, item.why, report));
     li.append(top);
     if (item.why) li.append(el('p', 'text-xs leading-5 text-pm-muted', item.why));
     list.append(li);
@@ -789,7 +916,7 @@ function focusCard(report) {
     body.append(replaced);
     if (origin.why) body.append(el('p', 'text-sm leading-6 text-pm-muted', origin.why));
 
-    const refocus = lastRefocus && lastRefocus.choice && lastRefocus.choice.keyword.toLowerCase() === report.keyword.toLowerCase() ? lastRefocus : null;
+    const refocus = refocusFor(report);
     if (refocus) {
       const listSource = refocus.source === 'ahrefs' ? 'ahrefs' : 'gsc';
       const options = [
@@ -804,6 +931,7 @@ function focusCard(report) {
         block.append(list);
         body.append(block);
       }
+      body.append(details(`Bekijk de herfocus: waarom "${report.keyword}"`, [refocusResult(refocus, report, { done: true })]));
     }
   }
 
@@ -867,16 +995,29 @@ function mappingCard(report) {
       list.append(el('span', 'text-sm text-pm-muted', 'geen'));
     } else {
       items.forEach((item) => {
-        const pill = el('span', `pill ${pillClass}`, typeof item.volume === 'number' ? `${item.keyword} (${fmt(item.volume)})` : item.keyword);
-        if (item.why) pill.title = item.why;
-        list.append(pill);
+        list.append(el('span', `pill ${pillClass}`, typeof item.volume === 'number' ? `${item.keyword} (${fmt(item.volume)})` : item.keyword));
       });
     }
     row.append(list);
     body.append(row);
   });
 
-  body.append(el('p', 'text-xs leading-5 text-pm-muted', 'Tussen haakjes het zoekvolume per maand volgens Ahrefs. Beweeg over een zoekwoord voor de reden.'));
+  body.append(el('p', 'text-xs leading-5 text-pm-muted', 'Tussen haakjes het zoekvolume per maand volgens Ahrefs.'));
+
+  // De redenen staan in de pagina zelf, niet in een tooltip: die zie je niet op
+  // een telefoon en niet met het toetsenbord.
+  const reasons = groups
+    .slice(1)
+    .flatMap(([label, items]) => items.filter((item) => item.why).map((item) => ({ label, ...item })));
+  if (reasons.length) {
+    const list = el('ul', 'space-y-1.5');
+    reasons.forEach((item) => {
+      const li = el('li', 'text-sm leading-6');
+      li.append(el('strong', null, item.keyword), document.createTextNode(` (${item.label.toLowerCase()}): ${item.why}`));
+      list.append(li);
+    });
+    body.append(details('Waarom deze zoekwoorden?', [list]));
+  }
 
   const head = wrapper.querySelector('.card-head');
   head.append(copyButton(() => mappingMarkdown(report), 'kopieer mapping'));
@@ -1254,10 +1395,16 @@ function serpCard(report) {
   const table = el('table', 'data-table');
   const head = el('thead');
   const headRow = el('tr');
+  // Paginatype en woordenaantal vallen weg waar de kaart smal is: op mobiel, en op
+  // kleine laptops (1024-1279px) waar de resultaatkolom maar drie vijfde breed is.
+  // Pagina, topzoekwoord en status (de bron-informatie) blijven altijd staan; het
+  // topzoekwoord schuift op een telefoon onder de pagina.
+  const narrowHidden = 'hidden md:table-cell lg:hidden xl:table-cell';
+  const phoneHidden = 'hidden sm:table-cell';
   const columns = hasTypes
-    ? ['#', 'Pagina', 'Paginatype', 'Topzoekwoord', 'Woorden', 'Status']
-    : ['#', 'Pagina', 'Woorden', 'Koppen', 'Status'];
-  columns.forEach((label) => headRow.append(el('th', null, label)));
+    ? [['#', ''], ['Pagina', ''], ['Paginatype', narrowHidden], ['Topzoekwoord', phoneHidden], ['Woorden', narrowHidden], ['Status', '']]
+    : [['#', ''], ['Pagina', ''], ['Woorden', narrowHidden], ['Koppen', narrowHidden], ['Status', '']];
+  columns.forEach(([label, className]) => headRow.append(el('th', className || null, label)));
   head.append(headRow);
 
   const bodyRows = el('tbody');
@@ -1265,28 +1412,33 @@ function serpCard(report) {
     const row = el('tr');
     row.append(el('td', 'tabular-nums font-bold', result.position));
 
-    const page = el('td', 'min-w-[14rem]');
+    const page = el('td', 'min-w-[8rem] sm:min-w-[11rem]');
     const link = el('a', 'font-semibold text-pm-blue hover:underline break-anywhere', result.title || result.domain);
     link.href = result.url;
     link.target = '_blank';
     link.rel = 'noopener';
     page.append(link, el('div', 'text-xs text-pm-muted break-anywhere', result.domain));
+    // De reden staat hier en niet in de smalle statuskolom: daar rekte hij de
+    // tabel op tot buiten de kaart.
+    if (result.reason) page.append(el('div', 'mt-1 text-xs text-pm-muted break-anywhere', result.reason));
+    if (hasTypes && result.topKeyword) {
+      page.append(el('div', 'sm:hidden mt-1 text-xs break-anywhere', `topzoekwoord: ${result.topKeyword}`));
+    }
     row.append(page);
 
     if (hasTypes) {
-      row.append(el('td', 'text-xs', result.pageTypeLabel || '—'));
-      const top = el('td', 'text-xs break-anywhere');
+      row.append(el('td', `text-xs ${narrowHidden}`, result.pageTypeLabel || '—'));
+      const top = el('td', `text-xs break-anywhere ${phoneHidden}`);
       top.textContent = result.topKeyword ? `${result.topKeyword}${typeof result.topKeywordVolume === 'number' ? ` (${fmt(result.topKeywordVolume)})` : ''}` : '—';
       row.append(top);
-      row.append(el('td', 'tabular-nums', result.wordCount != null ? result.wordCount.toLocaleString('nl-NL') : '—'));
+      row.append(el('td', `tabular-nums ${narrowHidden}`, result.wordCount != null ? result.wordCount.toLocaleString('nl-NL') : '—'));
     } else {
-      row.append(el('td', 'tabular-nums', result.wordCount != null ? result.wordCount.toLocaleString('nl-NL') : '—'));
-      row.append(el('td', 'tabular-nums', result.headingCount ?? '—'));
+      row.append(el('td', `tabular-nums ${narrowHidden}`, result.wordCount != null ? result.wordCount.toLocaleString('nl-NL') : '—'));
+      row.append(el('td', `tabular-nums ${narrowHidden}`, result.headingCount ?? '—'));
     }
 
-    const status = el('td');
+    const status = el('td', 'whitespace-nowrap');
     status.append(el('span', `pill ${RESULT_STATUS[result.status] ?? ''}`, result.status));
-    if (result.reason) status.append(el('div', 'mt-1 text-xs text-pm-muted', result.reason));
     row.append(status);
 
     bodyRows.append(row);
@@ -1294,7 +1446,10 @@ function serpCard(report) {
 
   table.append(head, bodyRows);
   wrap.append(table);
-  wrapper.append(wrap);
+  wrapper.append(
+    el('p', 'md:hidden lg:block xl:hidden px-4 pt-3 text-xs text-pm-muted', 'Paginatype en woordenaantal zie je op een breder scherm.'),
+    wrap
+  );
   return wrapper;
 }
 
@@ -1331,7 +1486,7 @@ function toMarkdown(report) {
     lines.push(`- Zoekvolume: ${fmt(keywordInfo.volume)} per maand, moeilijkheid ${fmt(keywordInfo.difficulty)}${keywordInfo.parentTopic ? `, parent topic "${keywordInfo.parentTopic}" (${fmt(keywordInfo.parentVolume)})` : ''}`);
     lines.push(`- Intentievlaggen Ahrefs: ${intentFlags(keywordInfo.intents)}`);
   } else {
-    lines.push(`- Zoekvolume: ${report.keywordInfoError ? `niet opgehaald (${report.keywordInfoError})` : 'Ahrefs kent dit zoekwoord niet'}`);
+    lines.push(`- Zoekvolume: ${missingVolumeText(report)}`);
   }
   lines.push(`- Jouw pagina in de top 10: ${measured.ownPosition ? `ja, positie ${measured.ownPosition}` : 'nee'}`);
   if (measured.topKeywords.length) {
@@ -1360,6 +1515,23 @@ function toMarkdown(report) {
       '',
       `Vervangt "${origin.previousKeyword}". ${SOURCE_LABELS[origin.source] || origin.source}.${origin.why ? ` ${origin.why}` : ''}`
     );
+    // Dezelfde bewijslast als op het scherm: waarom de rest van de lijst afviel, en wat de alternatieven waren.
+    const refocus = refocusFor(report);
+    if (refocus) {
+      if (refocus.rejected) lines.push('', refocus.rejected);
+      const alternatives = [...(refocus.alternatives || []), ...(refocus.proposals || []).filter((item) => item.verified)]
+        .filter((item) => item.keyword.toLowerCase() !== report.keyword.toLowerCase());
+      if (alternatives.length) {
+        lines.push('', 'Alternatieven:');
+        alternatives.forEach((item) => {
+          const facts = [
+            typeof item.volume === 'number' ? `${fmt(item.volume)} per maand` : null,
+            item.row?.impressions != null ? `${fmt(item.row.impressions)} vertoningen` : null,
+          ].filter(Boolean).join(', ');
+          lines.push(`- ${item.keyword}${facts ? ` (${facts})` : ''}${item.why ? ` — ${item.why}` : ''}`);
+        });
+      }
+    }
   }
 
   lines.push('', mappingMarkdown(report), '', '## Focus keyword optimalisatie', '');
@@ -1460,9 +1632,13 @@ function showEmpty() {
   ]);
 }
 
+function skeletonNode() {
+  return document.getElementById('loading-state').content.cloneNode(true);
+}
+
 function showSkeleton() {
   output.className = '';
-  output.replaceChildren(document.getElementById('loading-state').content.cloneNode(true));
+  output.replaceChildren(skeletonNode());
   actions.replaceChildren();
   progressBar.classList.remove('hidden');
   progressBar.setAttribute('data-indeterminate', '');
@@ -1474,7 +1650,7 @@ const ERROR_HINTS = {
   blocked_host: 'Alleen openbaar bereikbare pagina\'s kunnen geanalyseerd worden.',
   http_error: 'Test de URL in een privévenster. Blokkeert de server bots, dan kan de tool er niet bij.',
   fetch_failed: 'Controleer de schrijfwijze van het domein. Bestaat de site wel en is hij bereikbaar?',
-  no_serp_key: 'Zet AHREFS_API_KEY in Vercel onder Settings → Environment Variables (of lokaal in .env.local).',
+  no_serp_key: 'Zet de genoemde variabele in Vercel onder Settings → Environment Variables (of lokaal in .env.local) en rol opnieuw uit.',
   no_ahrefs_key: 'Zet AHREFS_API_KEY in Vercel onder Settings → Environment Variables (of lokaal in .env.local).',
   ahrefs_auth: 'Controleer of de Ahrefs-sleutel klopt, nog geldig is en of er nog API-units over zijn.',
   ahrefs_quota: 'Ahrefs geeft een limiet aan. Wacht even, of controleer het aantal units in Ahrefs.',
@@ -1502,6 +1678,7 @@ const ERROR_HINTS = {
 
 function errorBox(error) {
   const box = el('div', 'notice notice-error');
+  box.setAttribute('role', 'alert');
   box.append(el('p', 'notice-title', error.message || error.error || 'Onbekende fout.'));
   const hint = ERROR_HINTS[error.code];
   if (hint) box.append(el('p', 'mt-1 text-sm leading-6 text-pm-muted', hint));
@@ -1512,11 +1689,25 @@ function renderError(error) {
   output.className = '';
   const box = errorBox(error);
   box.classList.add('mx-auto', 'max-w-2xl');
+
+  // Mislukt een analyse terwijl er al een rapport was (bijvoorbeeld de heranalyse
+  // na een herfocus), dan ben je dat rapport niet kwijt.
+  const previous = lastReport;
+  if (previous) {
+    const back = el('button', 'btn btn-outline btn-sm mt-3');
+    back.type = 'button';
+    back.textContent = 'terug naar het vorige resultaat';
+    back.addEventListener('click', () => {
+      renderReport(previous);
+      setStatus('saved', 'vorige analyse');
+    });
+    box.append(back);
+  }
   output.replaceChildren(box);
 
   actions.replaceChildren();
   progressBar.classList.add('hidden');
-  setStatus('error', 'Mislukt');
+  setStatus('error', 'mislukt');
   setSteps([
     { state: 'todo', text: 'intent check' },
     { state: 'todo', text: 'focus zoekwoord' },
@@ -1536,6 +1727,7 @@ function setLoading(loading, label = 'bezig met analyseren') {
   resetBtn.disabled = loading;
   submitSpinner.classList.toggle('hidden', !loading);
   submitArrow.classList.toggle('hidden', loading);
+  output.querySelectorAll('[data-busy-disable]').forEach((button) => { button.disabled = loading; });
 
   clearInterval(timer);
   if (!loading) {
@@ -1567,17 +1759,25 @@ const STATUS_TONES = {
 };
 
 function setStatus(kind, text) {
+  // De verstreken tijd verandert elke seconde; die voorlezen maakt een screenreader onbruikbaar.
+  statusBadge.setAttribute('aria-live', kind === 'busy' ? 'off' : 'polite');
   statusBadge.className = `px-2 py-0.5 text-xs font-semibold tabular-nums ${STATUS_TONES[kind] || ''}`;
   statusBadge.classList.toggle('hidden', !kind);
   statusBadge.textContent = text || '';
 }
 
+const STEP_STATE_TEXT = { todo: ', nog niet gestart', active: ', huidige stap', done: ', afgerond' };
+
+/** De status zit ook in verborgen tekst: kleur en vinkje alleen bereiken een screenreader niet. */
 function setSteps(steps) {
-  stepButtons.forEach((button, index) => {
+  stepItems.forEach((item, index) => {
     const step = steps[index];
     if (!step) return;
-    button.dataset.state = step.state;
-    button.querySelector('.step-text').textContent = step.text;
+    item.dataset.state = step.state;
+    item.querySelector('.step-text').textContent = step.text;
+    item.querySelector('.step-state').textContent = STEP_STATE_TEXT[step.state] || '';
+    if (step.state === 'active') item.setAttribute('aria-current', 'step');
+    else item.removeAttribute('aria-current');
   });
 }
 
@@ -1593,16 +1793,17 @@ function updateFieldState() {
   });
 
   const value = urlField.value.trim();
-  if (!value) {
-    urlHint.textContent = URL_HINT;
-    urlHint.className = 'field-hint';
-  } else if (URL_PATTERN.test(value)) {
-    urlHint.textContent = 'URL herkend: de tool haalt deze pagina zelf op.';
-    urlHint.className = 'field-hint is-ok';
-  } else {
-    urlHint.textContent = 'Dit lijkt geen geldige URL.';
-    urlHint.className = 'field-hint is-error';
-  }
+  const valid = !value || URL_PATTERN.test(value);
+  urlField.setAttribute('aria-invalid', String(!valid));
+  if (!value) setUrlHint(URL_HINT, 'field-hint');
+  else if (valid) setUrlHint('URL herkend: de tool haalt deze pagina zelf op.', 'field-hint is-ok');
+  else setUrlHint('Dit lijkt geen geldige URL.', 'field-hint is-error');
+}
+
+/** Alleen bij een echte wissel: de hint is aria-live, en elke toetsaanslag voorlezen stoort. */
+function setUrlHint(text, className) {
+  if (urlHint.textContent !== text) urlHint.textContent = text;
+  if (urlHint.className !== className) urlHint.className = className;
 }
 
 form.addEventListener('input', () => {
@@ -1620,17 +1821,26 @@ resetBtn.addEventListener('click', (event) => {
   storageRemove(STORAGE.draft);
   storageRemove(STORAGE.report);
   storageRemove(STORAGE.refocus);
+  storageRemove(STORAGE.gsc);
+  lastGscText = '';
   showEmpty();
   setTimeout(updateFieldState); // het native reset-event leegt de velden pas na deze handler
 });
 
 // --- Wachtwoord (alleen als APP_PASSWORD op de server staat) ---------------------
 
-function askForPassword(message) {
+/**
+ * @param retry  wat er na het wachtwoord opnieuw moet: de onderbroken analyse of
+ *               herfocus, niet zomaar het formulier (dat zou ronde 0 herstarten).
+ */
+function askForPassword(message, retry) {
+  retryAfterPassword = retry || (() => form.requestSubmit());
   passwordError.textContent = message || '';
   passwordError.classList.toggle('hidden', !message);
   passwordOverlay.classList.remove('hidden');
   passwordOverlay.classList.add('flex');
+  // De rest van de pagina is onbereikbaar zolang het wachtwoordscherm openstaat.
+  document.querySelectorAll('body > header, body > main').forEach((node) => node.setAttribute('inert', ''));
   passwordInput.focus();
 }
 
@@ -1640,8 +1850,11 @@ passwordForm.addEventListener('submit', (event) => {
   storageSet(STORAGE.password, appPassword);
   passwordOverlay.classList.add('hidden');
   passwordOverlay.classList.remove('flex');
+  document.querySelectorAll('body > header, body > main').forEach((node) => node.removeAttribute('inert'));
   passwordInput.value = '';
-  form.requestSubmit();
+  const retry = retryAfterPassword || (() => form.requestSubmit());
+  retryAfterPassword = null;
+  retry();
 });
 
 // --- Opslag ---------------------------------------------------------------------
@@ -1677,7 +1890,7 @@ function storageRemove(key) {
     if (saved?.stage && saved?.intent) {
       lastReport = saved;
       renderReport(saved);
-      setStatus('saved', 'Vorige analyse');
+      setStatus('saved', 'vorige analyse');
     }
   } catch { /* ongeldige opslag negeren */ }
 })();

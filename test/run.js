@@ -7,7 +7,7 @@
 
 import assert from 'node:assert/strict';
 import { parseGscExport } from '../lib/gsc.js';
-import { phraseCoverage, normalize } from '../lib/text.js';
+import { phraseCoverage, normalize, repairLatexDiaeresis } from '../lib/text.js';
 import { describePageType } from '../lib/pagetype.js';
 import { measureSerp, keywordPlacement, verifyIntent } from '../lib/intent.js';
 import { verifyRefocus } from '../lib/refocus.js';
@@ -89,6 +89,13 @@ test('phraseCoverage: letterlijk, los en ontbreekt', () => {
   assert.equal(phraseCoverage('Dumbbells in hex-vorm rollen niet weg', 'hex dumbbells'), 'los');
   assert.equal(phraseCoverage('Kettlebells voor thuis', 'hex dumbbells'), 'ontbreekt');
   assert.equal(phraseCoverage('', 'hex dumbbells'), 'ontbreekt');
+});
+
+test('repairLatexDiaeresis: LaTeX-trema terug naar ë, echte aanhalingstekens blijven', () => {
+  const raw = JSON.stringify({ a: 'x' }).replace('x', 'commerci\\"ele, ori\\"enteert');
+  assert.equal(JSON.parse(repairLatexDiaeresis(raw)).a, 'commerciële, oriënteert');
+  const quoted = JSON.stringify({ b: 'het woord "energie" staat erin' });
+  assert.equal(JSON.parse(repairLatexDiaeresis(quoted)).b, 'het woord "energie" staat erin');
 });
 
 // --- Paginatypes -------------------------------------------------------------------

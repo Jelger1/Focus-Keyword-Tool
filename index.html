@@ -33,13 +33,13 @@
   <div class="bg-deco" aria-hidden="true"></div>
 
   <!-- Cyaan balk, zoals bovenaan pureminds.nl -->
-  <div class="no-print flex-none bg-pm-cyan px-4 py-1.5 text-center text-xs font-semibold text-pm-ink">
+  <div class="topbar no-print flex-none bg-pm-cyan px-4 py-1.5 text-center text-xs font-semibold text-pm-ink">
     <a href="https://www.pureminds.nl/" target="_blank" rel="noopener" class="underline underline-offset-2 hover:no-underline">pure minds</a>
     <span class="mx-1.5">|</span>interne tool: keyword focus &amp; intent check<span class="hidden sm:inline"> voor één pagina en één zoekwoord</span>
   </div>
 
   <header class="no-print flex-none border-b border-pm-line bg-white/85 backdrop-blur">
-    <div class="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-6">
+    <div class="app-header max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-6">
       <div class="flex items-center gap-4 min-w-0">
         <img src="pureminds-logo.webp" alt="Pure Minds" width="106" height="39" class="h-[2.4rem] w-auto flex-none" />
         <span class="hidden sm:block h-9 w-px bg-pm-line" aria-hidden="true"></span>
@@ -52,11 +52,11 @@
     </div>
   </header>
 
-  <main class="w-full max-w-7xl mx-auto px-4 sm:px-6 py-4 sm:py-5 lg:py-4 grid gap-5 lg:gap-6 lg:grid-cols-5 lg:flex-1 lg:min-h-0">
+  <main class="app-main w-full max-w-7xl mx-auto px-4 sm:px-6 py-4 sm:py-5 lg:py-4 grid gap-5 lg:gap-6 lg:grid-cols-5 lg:flex-1 lg:min-h-0">
 
     <!-- Invoer -->
     <!-- Op desktop staat de pagina op schermhoogte; de kolom scrolt zelf als het formulier niet past -->
-    <section class="no-print min-w-0 lg:col-span-2 lg:min-h-0 lg:overflow-y-auto">
+    <section class="scroll-column no-print min-w-0 lg:col-span-2 lg:min-h-0 lg:overflow-y-auto lg:pr-2">
       <form id="analyze-form" class="card border-t-[3px] border-t-pm-cyan p-5 sm:p-6 flex flex-col gap-5">
         <div class="sm:hidden">
           <h1 class="text-base font-bold leading-tight">Keyword Focus &amp; Intent Check</h1>
@@ -72,9 +72,9 @@
             </span>
             Doel-URL
           </label>
-          <input type="text" id="target-url" name="url" required inputmode="url" autocomplete="off"
+          <input type="text" id="target-url" name="url" required inputmode="url" autocomplete="off" aria-describedby="url-hint"
             placeholder="www.klant.nl/diensten/zonnepanelen" class="input" />
-          <p id="url-hint" class="field-hint">De pagina die je wilt laten scoren. De tool haalt de content zelf op.</p>
+          <p id="url-hint" class="field-hint" aria-live="polite">De pagina die je wilt laten scoren. De tool haalt de content zelf op.</p>
         </div>
 
         <div class="field">
@@ -85,9 +85,9 @@
             </span>
             Focus zoekwoord
           </label>
-          <input type="text" id="keyword" name="keyword" required autocomplete="off"
+          <input type="text" id="keyword" name="keyword" required autocomplete="off" aria-describedby="keyword-hint"
             placeholder="zonnepanelen kopen" class="input" />
-          <p class="field-hint">Het zoekwoord waarop deze pagina moet ranken. De tool controleert eerst of het past bij de pagina en de Google-top 10.</p>
+          <p id="keyword-hint" class="field-hint">Het zoekwoord waarop deze pagina moet ranken. De tool controleert eerst of het past bij de pagina en de Google-top 10.</p>
         </div>
 
         <div class="space-y-2 pt-1">
@@ -130,21 +130,22 @@
             </div>
             <div id="result-actions" class="relative flex flex-wrap items-center gap-2"></div>
           </div>
-          <!-- De drie stappen van de flow; app.js zet de status per stap -->
-          <div id="steps" class="steps">
-            <button type="button" class="step" data-state="todo">
-              <span class="step-dot"><span class="step-num">1</span><svg class="step-check h-2.5 w-2.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M16.7 5.3a1 1 0 010 1.4l-8 8a1 1 0 01-1.4 0l-4-4a1 1 0 011.4-1.4L8 12.58l7.3-7.3a1 1 0 011.4 0z" clip-rule="evenodd"/></svg></span>
-              <span class="step-text">intent check</span>
-            </button>
-            <button type="button" class="step" data-state="todo">
-              <span class="step-dot"><span class="step-num">2</span><svg class="step-check h-2.5 w-2.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M16.7 5.3a1 1 0 010 1.4l-8 8a1 1 0 01-1.4 0l-4-4a1 1 0 011.4-1.4L8 12.58l7.3-7.3a1 1 0 011.4 0z" clip-rule="evenodd"/></svg></span>
-              <span class="step-text">focus zoekwoord</span>
-            </button>
-            <button type="button" class="step" data-state="todo">
-              <span class="step-dot"><span class="step-num">3</span><svg class="step-check h-2.5 w-2.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M16.7 5.3a1 1 0 010 1.4l-8 8a1 1 0 01-1.4 0l-4-4a1 1 0 011.4-1.4L8 12.58l7.3-7.3a1 1 0 011.4 0z" clip-rule="evenodd"/></svg></span>
-              <span class="step-text">aanbevelingen</span>
-            </button>
-          </div>
+          <!-- De drie stappen van de flow. Een lijst, geen knoppen: je kunt er niet op klikken.
+               app.js zet per stap de status en aria-current op de actieve stap. -->
+          <ol id="steps" class="steps" aria-label="Voortgang van de analyse">
+            <li class="step" data-state="todo">
+              <span class="step-dot" aria-hidden="true"><span class="step-num">1</span><svg class="step-check h-2.5 w-2.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M16.7 5.3a1 1 0 010 1.4l-8 8a1 1 0 01-1.4 0l-4-4a1 1 0 011.4-1.4L8 12.58l7.3-7.3a1 1 0 011.4 0z" clip-rule="evenodd"/></svg></span>
+              <span class="step-text">intent check</span><span class="step-state sr-only">, nog niet gestart</span>
+            </li>
+            <li class="step" data-state="todo">
+              <span class="step-dot" aria-hidden="true"><span class="step-num">2</span><svg class="step-check h-2.5 w-2.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M16.7 5.3a1 1 0 010 1.4l-8 8a1 1 0 01-1.4 0l-4-4a1 1 0 011.4-1.4L8 12.58l7.3-7.3a1 1 0 011.4 0z" clip-rule="evenodd"/></svg></span>
+              <span class="step-text">focus zoekwoord</span><span class="step-state sr-only">, nog niet gestart</span>
+            </li>
+            <li class="step" data-state="todo">
+              <span class="step-dot" aria-hidden="true"><span class="step-num">3</span><svg class="step-check h-2.5 w-2.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M16.7 5.3a1 1 0 010 1.4l-8 8a1 1 0 01-1.4 0l-4-4a1 1 0 011.4-1.4L8 12.58l7.3-7.3a1 1 0 011.4 0z" clip-rule="evenodd"/></svg></span>
+              <span class="step-text">aanbevelingen</span><span class="step-state sr-only">, nog niet gestart</span>
+            </li>
+          </ol>
           <div id="progress-bar" class="progress-track hidden"><span></span></div>
         </div>
 
@@ -153,7 +154,7 @@
           scherm ook voordat app.js draait. app.js bewaart deze inhoud bij het laden
           en zet hem terug na "alles wissen".
         -->
-        <div id="result-scroll" class="bg-pm-canvas p-3 sm:p-5 lg:flex-1 lg:min-h-0 lg:overflow-y-auto">
+        <div id="result-scroll" class="scroll-column bg-pm-canvas p-3 sm:p-5 lg:flex-1 lg:min-h-0 lg:overflow-y-auto">
           <div id="result-output">
             <div class="mx-auto max-w-2xl px-1 py-6 sm:py-10">
               <span class="pill pill-info">nog geen analyse</span>
@@ -168,7 +169,7 @@
                 </li>
                 <li class="card flex gap-3 p-4">
                   <span class="field-badge hex">2</span>
-                  <span><span class="block text-sm font-bold">Focus zoekwoord</span><span class="block text-xs leading-5 text-pm-muted">Behouden, of een beter zoekwoord uit Search Console.</span></span>
+                  <span><span class="block text-sm font-bold">Focus zoekwoord</span><span class="block text-xs leading-5 text-pm-muted">Behouden, of een beter zoekwoord uit Search Console of Ahrefs.</span></span>
                 </li>
                 <li class="card flex gap-3 p-4">
                   <span class="field-badge hex">3</span>
@@ -189,10 +190,10 @@
   </main>
 
   <!-- Wachtwoordscherm: verschijnt alleen als APP_PASSWORD op de server is ingesteld -->
-  <div id="password-overlay" class="hidden fixed inset-0 z-50 bg-[#10283c]/60 backdrop-blur-sm items-center justify-center p-6">
+  <div id="password-overlay" role="dialog" aria-modal="true" aria-labelledby="password-title" class="hidden fixed inset-0 z-50 bg-[#10283c]/60 backdrop-blur-sm items-center justify-center p-6">
     <form id="password-form" class="card border-t-[3px] border-t-pm-cyan w-full max-w-sm p-6 space-y-4">
       <div>
-        <h2 class="text-lg font-bold">Wachtwoord vereist<span class="text-pm-cyan">.</span></h2>
+        <h2 id="password-title" class="text-lg font-bold">Wachtwoord vereist<span class="text-pm-cyan">.</span></h2>
         <p class="mt-1 text-sm text-pm-muted">Deze tool is afgeschermd. Vraag het wachtwoord aan je collega.</p>
       </div>
       <label for="password-input" class="sr-only">Wachtwoord</label>
