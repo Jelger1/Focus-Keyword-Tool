@@ -56,6 +56,8 @@ Functions.
 | `lib/keywordsources.js` | De zoekwoordlijst voor de herfocus: export, of Search Console plus Ahrefs met terugval. |
 | `lib/claude.js` | De gedeelde Claude-aanroep (model, schema-output, server-side terugval). |
 | `lib/auth.js` | Het optionele wachtwoord, in constante tijd vergeleken. |
+| `lib/region.js` | Regio en taal (NL, US): Ahrefs-country, Serper gl/hl, Accept-Language, Search Console-land, taalinstructie voor Claude. |
+| `lib/progress.js` | Echte voortgang als NDJSON-stroom, heartbeats, en stoppen als de gebruiker afhaakt. |
 | `lib/pagetype.js`, `lib/text.js`, `lib/ratelimit.js` | Paginatypes van Ahrefs vertalen, normalisatie en stemming, rate limit. |
 | `test/run.js` | `npm test`: controles van de meet- en controlecode, zonder externe calls. |
 | `vercel.json` | Functie-instellingen (timeouts). |
@@ -70,6 +72,10 @@ Regels:
 - **De API geeft JSON terug**, geen HTML. De frontend bepaalt de opmaak. Een
   antwoord van `/api/analyze` heeft `stage: 'intent'` (geen match, stop) of
   `stage: 'compleet'` (het hele rapport); beide bevatten dezelfde basisvelden.
+  Vraagt de client `Accept: application/x-ndjson`, dan komt hetzelfde antwoord als
+  laatste regel van een stroom, na één regel per fase (`lib/progress.js`). Meld
+  alleen echte fasen: geen geschatte percentages. Roep `progress.throwIfGone()`
+  aan vóór elke dure stap.
 - **Hulpcode hoort in `lib/`, niet in `api/`.** Vercel maakt van elk bestand in
   `api/` een eigen endpoint.
 - **De code meet, Claude interpreteert, de code controleert.** Dat geldt voor
@@ -91,9 +97,14 @@ Regels:
   storing loopt de analyse door op Ahrefs. Elk API-antwoord zegt via `source`,
   `gsc_error` en `gsc.status` wat er gebruikt is. Houd elke zoekwoordrij voorzien
   van zijn herkomst (`origin`): de UI moet meting en schatting kunnen scheiden.
-- **Search Console-data is klantdata.** Op een publieke Vercel-deploy draait
-  Search Console alleen met `APP_PASSWORD` (`searchConsoleAllowed()`); het wachtwoord
-  wordt in constante tijd vergeleken (`lib/auth.js`). Haal die drempel niet weg.
+- **Search Console werkt altijd, ook zonder wachtwoord.** Keuze van het bureau: de
+  tool is intern en de link blijft binnen het team. `APP_PASSWORD` blijft optioneel
+  voor wie de hele tool wil afschermen, en wordt in constante tijd vergeleken
+  (`lib/auth.js`).
+- **Regio en taal zijn een instelling, geen aanname.** Alles wat land of taal kent
+  (Ahrefs-country, Serper gl/hl, Accept-Language, het landfilter van Search Console,
+  de taal van voorgestelde teksten) komt uit `lib/region.js`. Nieuwe code hardcodet
+  geen land; uitleg in het rapport blijft Nederlands.
 - **Service account-sleutels nooit in de map.** Ze horen in `.env.local` en in
   Vercel; `.gitignore` en `.vercelignore` weren JSON-sleutelbestanden in `api/`.
   Print nooit een omgevingsvariabele met een regel-filter: een meerregelige sleutel

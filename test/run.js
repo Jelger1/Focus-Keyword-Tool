@@ -11,11 +11,13 @@ import { phraseCoverage, normalize, repairLatexDiaeresis } from '../lib/text.js'
 import { describePageType } from '../lib/pagetype.js';
 import { measureSerp, keywordPlacement, verifyIntent } from '../lib/intent.js';
 import { verifyRefocus } from '../lib/refocus.js';
-import { mappingCandidates, buildReport } from '../lib/compare.js';
+import { mappingCandidates, buildReport, topicHeadings, termCandidates } from '../lib/compare.js';
 import {
   normalizePrivateKey, readCredentials, matchProperty, pageVariants, classifyGscError, toRow, fetchPageQueries,
-  searchConsoleAllowed,
 } from '../lib/searchconsole.js';
+import { readRegion, REGIONS, regionInstruction } from '../lib/region.js';
+import { createProgress } from '../lib/progress.js';
+import { buildIntentMessage } from '../lib/intent.js';
 import { collectKeywordRows } from '../lib/keywordsources.js';
 import { passwordOk } from '../lib/auth.js';
 import { mergeKeywordLists, sourceFlags, pageInsight, isMeasured } from '../lib/hybrid.js';
@@ -350,20 +352,20 @@ test('toRow: CTR van fractie naar procent, afgerond', () => {
     { query: 'pregis paper', clicks: 5, impressions: 484, ctr: 1, position: 13 });
 });
 
-test('searchConsoleAllowed: publieke deploy zonder wachtwoord geeft geen klantdata', () => {
-  assert.equal(searchConsoleAllowed({}), true); // lokaal
-  assert.equal(searchConsoleAllowed({ VERCEL_ENV: 'development' }), true); // vercel dev
-  assert.equal(searchConsoleAllowed({ VERCEL_ENV: 'production' }), false);
-  assert.equal(searchConsoleAllowed({ VERCEL_ENV: 'preview' }), false);
-  assert.equal(searchConsoleAllowed({ VERCEL_ENV: 'production', APP_PASSWORD: 'x' }), true);
+test('fetchPageQueries: ook op een publieke deploy zonder APP_PASSWORD gewoon proberen', async () => {
+  // Met een kapotte sleutel komt de aanroep tot aan de sleutelcontrole: er is geen wachtwoorddrempel meer.
+  const result = await fetchPageQueries('https://www.x.nl/', { env: { VERCEL_ENV: 'production', GOOGLE_CLIENT_EMAIL: 'x@y', GOOGLE_PRIVATE_KEY: 'kapot' } });
+  assert.equal(result.status, 'sleutel_ongeldig');
+  assert.equal(result.attempted, true);
 });
 
-test('fetchPageQueries: publieke deploy zonder APP_PASSWORD roept Google niet aan', async () => {
-  const result = await fetchPageQueries('https://www.x.nl/', { env: { VERCEL_ENV: 'production', GOOGLE_CLIENT_EMAIL: 'x@y', GOOGLE_PRIVATE_KEY: PEM } });
-  assert.equal(result.status, 'niet_beveiligd');
-  assert.equal(result.attempted, false);
-  assert.equal(result.error, false);
-  assert.match(result.message, /APP_PASSWORD/);
+test('readRegion: nl en us, onbekend of leeg wordt Nederland', () => {
+  assert.equal(readRegion('us'), REGIONS.us);
+  assert.equal(readRegion('US '), REGIONS.us);
+  assert.equal(readRegion('nl'), REGIONS.nl);
+  assert.equal(readRegion(''), REGIONS.nl);
+  assert.equal(readRegion('de'), REGIONS.nl);
+  assert.deepEqual([REGIONS.us.ahrefsCountry, REGIONS.us.gscCountry, REGIONS.us.serper.hl], ['us', 'usa', 'en']);
 });
 
 test('passwordOk: open zonder wachtwoord, anders exact en in constante tijd', () => {
@@ -444,6 +446,126 @@ test('mappingCandidates: Search Console-zoekopdrachten als kandidaat, na de Ahre
   assert.ok(candidates[0].sources.some((source) => source.startsWith('Search Console: 40 vertoningen')));
   assert.equal(candidates[1].volume, null);
   assert.equal(candidates[1].impressions, 62);
+});
+
+// --- Voortgang en regio ------------------------------------------------------------------
+
+function fakeResponse() {
+  const listeners = {};
+  return {
+    statusCode: 0, headers: {}, chunks: [], ended: false, writableEnded: false, writableFinished: false, destroyed: false, body: null,
+    setHeader(name, value) { this.headers[name.toLowerCase()] = value; },
+    write(chunk) { this.chunks.push(chunk); },
+    end() { this.ended = true; this.writableEnded = true; this.writableFinished = true; },
+    status(code) { this.statusCode = code; return this; },
+    json(body) { this.body = body; this.end(); },
+    on(event, fn) { listeners[event] = fn; },
+    emit(event) { listeners[event]?.(); },
+  };
+}
+
+test('createProgress: zonder Accept-header gewoon één JSON-antwoord', () => {
+  const res = fakeResponse();
+  const progress = createProgress({ headers: {} }, res);
+  progress.step('bronnen', 'active', 'x');
+  progress.send(200, { ok: true });
+  assert.equal(res.chunks.length, 0);
+  assert.deepEqual(res.body, { ok: true });
+  assert.equal(res.statusCode, 200);
+});
+
+test('createProgress: met NDJSON een regel per fase en het resultaat als laatste', () => {
+  const res = fakeResponse();
+  const progress = createProgress({ headers: { accept: 'application/x-ndjson' } }, res);
+  progress.step('bronnen', 'active', 'ophalen');
+  progress.step('bronnen', 'done', 'klaar', { source: 'ahrefs_only' });
+  progress.send(200, { stage: 'intent' });
+  const lines = res.chunks.join('').trim().split('\n').map((line) => JSON.parse(line));
+  assert.equal(res.headers['content-type'], 'application/x-ndjson; charset=utf-8');
+  assert.deepEqual(lines.map((line) => line.type), ['progress', 'progress', 'result']);
+  assert.equal(lines[1].data.source, 'ahrefs_only');
+  assert.deepEqual(lines[2].data, { stage: 'intent' });
+  assert.equal(res.ended, true);
+});
+
+test('createProgress: een fout na de start komt als error-regel, ervoor als gewone status', () => {
+  const early = fakeResponse();
+  createProgress({ headers: { accept: 'application/x-ndjson' } }, early).send(400, { error: 'x', code: 'missing_input' });
+  assert.equal(early.statusCode, 400);
+  assert.equal(early.body.code, 'missing_input');
+
+  const late = fakeResponse();
+  const progress = createProgress({ headers: { accept: 'application/x-ndjson' } }, late);
+  progress.step('bronnen', 'active', 'x');
+  progress.send(502, { error: 'Ahrefs weigert', code: 'ahrefs_auth' });
+  const last = JSON.parse(late.chunks.at(-1));
+  assert.deepEqual([last.type, last.status, last.code], ['error', 502, 'ahrefs_auth']);
+});
+
+test('createProgress: afgehaakte gebruiker stopt het dure werk', () => {
+  const res = fakeResponse();
+  const progress = createProgress({ headers: { accept: 'application/x-ndjson' } }, res);
+  progress.step('bronnen', 'active', 'x');
+  res.emit('close');
+  assert.throws(() => progress.throwIfGone(), (error) => error.code === 'client_gone');
+  progress.send(200, { stage: 'intent' }); // schrijft niets meer
+  assert.equal(res.chunks.length, 1);
+});
+
+test('regionInstruction en buildIntentMessage: de regio staat bovenaan het bericht', () => {
+  assert.match(regionInstruction(REGIONS.us), /Google Verenigde Staten \(US\)[\s\S]*in het Engels[\s\S]*in het Nederlands/);
+  const message = buildIntentMessage({
+    keyword: 'paper packaging machine',
+    target: { url: 'https://x.com/', title: 't', metaDescription: '', h1: 'h', wordCount: 100, headings: [], text: 'tekst' },
+    serp: { organic: [], peopleAlsoAsk: [] },
+    serpResults: [],
+    keywordInfo: null,
+    measured: { pageTypes: [], typed: 0, total: 0, topKeywords: [], features: [], ownPosition: null },
+    providerLabel: 'Ahrefs (Google Verenigde Staten)',
+    gsc: { status: 'ok', startDate: '2026-06-22', endDate: '2026-09-20', country: 'usa' },
+    gscInsight: { focusKeyword: null, topQueries: [], totals: { queries: 3, scope: 'pagina', impressions: 10, clicks: 1, position: 4 } },
+    region: REGIONS.us,
+  });
+  assert.ok(message.startsWith('# Regio'));
+  assert.match(message, /alleen Verenigde Staten/);
+});
+
+// --- Taal: sitekoppen en termen ------------------------------------------------------
+
+test('topicHeadings: Engelse en Nederlandse sitekoppen weg, inhoudelijke koppen blijven', () => {
+  const texts = [
+    'Subscribe to our newsletter', 'Related articles', 'You may also like', 'Have questions?',
+    'Need help?', 'Shopping cart', 'Lees ook', 'Nieuwsbrief',
+    // Tegenvoorbeelden: dezelfde woorden, maar over het onderwerp.
+    'Related costs of paper packaging', 'Need for protective packaging in e-commerce',
+    'How to read more from packaging labels', 'Customer experience with void fill',
+    'Wat kost een zonnepaneel?',
+  ];
+  const kept = topicHeadings({ headings: texts.map((text) => ({ level: 2, text })) }).map((heading) => heading.text);
+  assert.deepEqual(kept, [
+    'Related costs of paper packaging', 'Need for protective packaging in e-commerce',
+    'How to read more from packaging labels', 'Customer experience with void fill',
+    'Wat kost een zonnepaneel?',
+  ]);
+});
+
+test('termCandidates: Engelse opvulwoorden alleen weg bij regio US, vaktermen blijven', () => {
+  const us = [1, 2, 3].map(() => ({
+    title: 'Paper cushioning',
+    text: 'Choose the best settings for your paper cushioning machine. Subscribe to our newsletter. A landing page explains the checkout flow.',
+  }));
+  const target = { title: '', metaDescription: '', text: '' };
+  const usTerms = termCandidates(us, target, 'paper packaging', { region: REGIONS.us }).map((c) => c.term);
+  for (const term of ['cushioning', 'paper cushioning', 'landing page', 'checkout']) assert.ok(usTerms.includes(term), `${term} ontbreekt`);
+  for (const term of ['settings', 'best settings', 'subscribe']) assert.ok(!usTerms.includes(term), `${term} hoort er niet in`);
+
+  // Nederlands: Engelse leenwoorden zijn hier vaak gewoon vakterm.
+  const nl = [1, 2, 3].map(() => ({
+    title: 'Conversie',
+    text: 'Een goede landing page heeft een duidelijke call to action en een snelle checkout voor elke bezoeker.',
+  }));
+  const nlTerms = termCandidates(nl, target, 'conversie', { region: REGIONS.nl }).map((c) => c.term);
+  for (const term of ['landing page', 'checkout', 'duidelijke call']) assert.ok(nlTerms.includes(term), `${term} ontbreekt`);
 });
 
 await runAll();

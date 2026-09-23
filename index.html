@@ -90,6 +90,29 @@
           <p id="keyword-hint" class="field-hint">Het zoekwoord waarop deze pagina moet ranken. De tool controleert eerst of het past bij de pagina en de Google-top 10.</p>
         </div>
 
+        <fieldset class="field is-filled">
+          <legend class="field-label">
+            <span class="field-badge hex">
+              <span class="field-num">3</span>
+              <svg class="field-check h-3 w-3" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M16.7 5.3a1 1 0 010 1.4l-8 8a1 1 0 01-1.4 0l-4-4a1 1 0 011.4-1.4L8 12.58l7.3-7.3a1 1 0 011.4 0z" clip-rule="evenodd"/></svg>
+            </span>
+            Regio en taal
+          </legend>
+          <div class="segmented" id="region-toggle">
+            <label class="segment">
+              <input type="radio" name="region" value="nl" checked />
+              <span class="segment-code">NL</span>
+              <span class="segment-text">Nederland · Nederlands</span>
+            </label>
+            <label class="segment">
+              <input type="radio" name="region" value="us" />
+              <span class="segment-code">US</span>
+              <span class="segment-text">Verenigde Staten · Engels</span>
+            </label>
+          </div>
+          <p class="field-hint">Welke Google de tool bekijkt, het land in Search Console en de taal van voorgestelde koppen en teksten. De uitleg blijft Nederlands.</p>
+        </fieldset>
+
         <div class="space-y-2 pt-1">
           <button type="submit" id="submit-btn" class="btn btn-primary w-full px-5 py-3.5 text-[15px]">
             <svg id="submit-spinner" class="hidden h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -127,6 +150,7 @@
             <div class="flex items-center gap-2.5">
               <h2 class="card-title">Focus check</h2>
               <span id="status-badge" role="status" aria-live="polite" class="hidden px-2 py-0.5 text-xs font-semibold tabular-nums"></span>
+              <span id="source-badge" class="hidden"></span>
             </div>
             <div id="result-actions" class="relative flex flex-wrap items-center gap-2"></div>
           </div>
@@ -147,6 +171,22 @@
             </li>
           </ol>
           <div id="progress-bar" class="progress-track hidden"><span></span></div>
+          <!-- Altijd bewerkbaar: een ander zoekwoord proberen voor dezelfde pagina kan op elk
+               moment, ook terwijl er een analyse loopt (die wordt dan afgebroken). -->
+          <form id="recheck-form" class="recheck hidden" novalidate>
+            <label for="recheck-keyword" class="recheck-label">Focus zoekwoord</label>
+            <div class="recheck-row">
+              <input type="text" id="recheck-keyword" class="input input-compact" autocomplete="off"
+                placeholder="typ een ander zoekwoord" aria-describedby="recheck-error recheck-hint" />
+              <select id="recheck-region" class="input input-compact recheck-select" aria-label="Regio en taal">
+                <option value="nl">NL · Nederlands</option>
+                <option value="us">US · Engels</option>
+              </select>
+              <button type="submit" id="recheck-btn" class="btn btn-primary btn-sm">check opnieuw</button>
+            </div>
+            <p id="recheck-error" class="recheck-error" role="alert"></p>
+            <p id="recheck-hint" class="recheck-hint"></p>
+          </form>
         </div>
 
         <!--
@@ -160,7 +200,7 @@
               <span class="pill pill-info">nog geen analyse</span>
               <h3 class="mt-3 text-xl font-bold tracking-tight">Je focus check verschijnt hier<span class="text-pm-cyan">.</span></h3>
               <p class="mt-2 max-w-md text-sm leading-6 text-pm-muted">
-                Vul de doel-URL en het focus zoekwoord in. De tool haalt de Google-top 10 op, beoordeelt of je pagina bij de zoekintentie past en levert daarna pas aanbevelingen. Elke conclusie komt met de bron.
+                Vul de doel-URL en het focus zoekwoord in en kies de regio. De tool haalt de Google-top 10 op, beoordeelt of je pagina bij de zoekintentie past en levert daarna pas aanbevelingen. Elke conclusie komt met de bron.
               </p>
               <ol class="mt-7 grid gap-3 sm:grid-cols-2">
                 <li class="card flex gap-3 p-4">

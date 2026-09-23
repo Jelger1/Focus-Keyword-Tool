@@ -27,6 +27,13 @@ const actions = document.getElementById('result-actions');
 const statusBadge = document.getElementById('status-badge');
 const progressBar = document.getElementById('progress-bar');
 const stepItems = [...document.querySelectorAll('#steps .step')];
+const sourceBadgeSlot = document.getElementById('source-badge');
+const regionRadios = [...document.querySelectorAll('input[name="region"]')];
+const recheckForm = document.getElementById('recheck-form');
+const recheckKeyword = document.getElementById('recheck-keyword');
+const recheckRegion = document.getElementById('recheck-region');
+const recheckHint = document.getElementById('recheck-hint');
+const recheckError = document.getElementById('recheck-error');
 
 const passwordOverlay = document.getElementById('password-overlay');
 const passwordForm = document.getElementById('password-form');
@@ -43,6 +50,7 @@ const STORAGE = {
   report: 'focus-report',
   refocus: 'focus-refocus',
   gsc: 'focus-gsc',
+  region: 'focus-region',
 };
 
 /** Zelfde herkenning als in lib/page.js, zodat de hint klopt met wat de server doet. */
@@ -77,6 +85,20 @@ const PLACEMENT_STATUS = {
   ontbreekt: { pill: 'pill-bad', text: 'ontbreekt' },
 };
 
+/**
+ * Dezelfde regio's als lib/region.js op de server. De server is de bron: hij
+ * valt voor een onbekende waarde terug op Nederland. Hier staan alleen de labels.
+ */
+const REGION_INFO = {
+  nl: { id: 'nl', label: 'Nederland', short: 'NL', language: 'Nederlands' },
+  us: { id: 'us', label: 'Verenigde Staten', short: 'US', language: 'Engels' },
+};
+
+/** De regio van een rapport of herfocus; oude rapporten zonder regio waren Nederlands. */
+function regionOf(item) {
+  return REGION_INFO[item?.region] || REGION_INFO.nl;
+}
+
 let lastReport = null;
 let lastRefocus = null;
 let appPassword = storageGet(STORAGE.password) || '';
@@ -88,6 +110,27 @@ let lastGscText = storageGet(STORAGE.gsc) || '';
 
 /** Wat er opnieuw moet gebeuren nadat de marketeer het wachtwoord heeft ingevuld. */
 let retryAfterPassword = null;
+
+/**
+ * De aanvraag die nu loopt. Start de marketeer iets nieuws terwijl er nog een
+ * aanvraag loopt, dan breken we de oude af: de server stopt dan ook vóór de
+ * dure Claude-aanroepen. Elke run weet zo of hij nog de actuele is.
+ */
+let activeRun = null;
+
+function beginRun() {
+  activeRun?.controller.abort();
+  activeRun = { controller: new AbortController() };
+  return activeRun;
+}
+
+function isCurrent(run) {
+  return activeRun === run;
+}
+
+function endRun(run) {
+  if (activeRun === run) activeRun = null;
+}
 
 // --- Kleine DOM-helpers --------------------------------------------------------
 
@@ -210,31 +253,336 @@ function share(count, report) {
 
 // --- Praten met de server --------------------------------------------------------
 
-async function postJson(path, data) {
-  const headers = { 'Content-Type': 'application/json' };
+const ABORTED = 'aborted';
+
+function requestError(message, code) {
+  return Object.assign(new Error(message), { code });
+}
+
+/**
+ * POST met echte voortgang. De server stuurt, omdat we erom vragen, één regel
+ * JSON per fase en het rapport als laatste regel (lib/progress.js). Een fout vóór
+ * de eerste fase (wachtwoord, ontbrekende invoer) komt als gewoon JSON-antwoord.
+ */
+async function postStream(path, data, { onProgress, signal } = {}) {
+  const headers = { 'Content-Type': 'application/json', Accept: 'application/x-ndjson, application/json' };
   if (appPassword) headers['X-App-Password'] = appPassword;
 
   let response;
   try {
-    response = await fetch(path, { method: 'POST', headers, body: JSON.stringify(data) });
-  } catch {
-    throw Object.assign(new Error('Geen verbinding met de server. Controleer je internetverbinding.'), { code: 'offline' });
+    response = await fetch(path, { method: 'POST', headers, body: JSON.stringify(data), signal });
+  } catch (error) {
+    if (error.name === 'AbortError') throw requestError('Afgebroken.', ABORTED);
+    throw requestError('Geen verbinding met de server. Controleer je internetverbinding.', 'offline');
   }
 
-  let payload;
+  if (!/ndjson/i.test(response.headers.get('content-type') || '')) {
+    let payload;
+    try {
+      payload = await response.json();
+    } catch {
+      throw requestError(`De server gaf een onverwacht antwoord (HTTP ${response.status}).`, 'bad_response');
+    }
+    if (!response.ok) throw requestError(payload.error || `Aanvraag mislukt (HTTP ${response.status}).`, payload.code || 'analysis_failed');
+    return payload;
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
   try {
-    payload = await response.json();
-  } catch {
-    throw Object.assign(new Error(`De server gaf een onverwacht antwoord (HTTP ${response.status}).`), { code: 'bad_response' });
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let newline;
+      while ((newline = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, newline).trim();
+        buffer = buffer.slice(newline + 1);
+        if (!line) continue;
+        let message;
+        try {
+          message = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        if (message.type === 'progress') onProgress?.(message);
+        else if (message.type === 'result') return message.data;
+        else if (message.type === 'error') throw requestError(message.error || 'Aanvraag mislukt.', message.code || 'analysis_failed');
+      }
+    }
+  } catch (error) {
+    if (error.name === 'AbortError' || signal?.aborted) throw requestError('Afgebroken.', ABORTED);
+    // Een foutregel van de server heeft al een code en een Nederlandse tekst.
+    if (error.code) throw error;
+    // De rest is de verbinding die wegviel: time-out van de functie, of wifi.
+    throw requestError('De verbinding met de server viel weg voordat de analyse klaar was. Probeer het opnieuw.', 'stream_cut');
   }
-
-  if (!response.ok) {
-    throw Object.assign(new Error(payload.error || `Aanvraag mislukt (HTTP ${response.status}).`), {
-      code: payload.code || 'analysis_failed',
-    });
-  }
-  return payload;
+  throw requestError('De verbinding met de server viel weg voordat de analyse klaar was. Probeer het opnieuw.', 'stream_cut');
 }
+
+// --- Echte voortgang in beeld --------------------------------------------------------------
+
+/** De fasen die de server meldt, met een vaste titel. De server vult de details in. */
+const ANALYZE_PLAN = [
+  { id: 'bronnen', title: 'Pagina en Google-top 10 ophalen' },
+  { id: 'lezen', title: 'Concurrenten lezen en Search Console raadplegen' },
+  { id: 'intent', title: 'Intent check door Claude' },
+  { id: 'aanbevelingen', title: 'Aanbevelingen schrijven', note: 'alleen bij een match' },
+];
+
+const REFOCUS_PLAN = [
+  { id: 'pagina', title: 'Pagina ophalen' },
+  { id: 'bronnen', title: 'Zoekwoorden verzamelen' },
+  { id: 'verrijken', title: 'Zoekvolumes aanvullen', optional: true },
+  { id: 'kiezen', title: 'Claude kiest een passend zoekwoord' },
+  { id: 'controle', title: 'Voorstellen checken op zoekvolume', optional: true },
+];
+
+/** De status van een fase in woorden: kleur, vinkje en doorhaling bereiken een screenreader niet. */
+const PANEL_STATE_TEXT = { todo: ', nog niet gestart', active: ', bezig', done: ', afgerond', skipped: ', overgeslagen' };
+
+const SPINNER_SVG = '<svg class="h-4 w-4 animate-spin pstep-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path></svg>';
+const CHECK_SVG = '<svg class="h-4 w-4 pstep-check" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M16.7 5.3a1 1 0 010 1.4l-8 8a1 1 0 01-1.4 0l-4-4a1 1 0 011.4-1.4L8 12.58l7.3-7.3a1 1 0 011.4 0z" clip-rule="evenodd"/></svg>';
+
+/**
+ * Een kaart met de fasen van de aanvraag. Elke fase toont wat de server er
+ * werkelijk over meldt, en hoe lang hij duurde: geen geschatte percentages.
+ */
+function createProgressPanel(plan, { title, subtitle }) {
+  const { wrapper } = card(title, subtitle);
+  wrapper.classList.add('progress-panel');
+  const body = el('div', 'px-5 py-3');
+  const badgeRow = el('div', 'mb-2 hidden');
+  const list = el('ol', 'list-none');
+  list.setAttribute('aria-live', 'polite');
+  body.append(badgeRow, list);
+  body.append(el('p', 'mt-2 text-xs leading-5 text-pm-muted', 'Dit is de echte voortgang van de server, fase voor fase. Een analyse met aanbevelingen duurt meestal één tot twee minuten.'));
+  wrapper.append(body);
+
+  const rows = new Map();
+  const startedAt = new Map();
+
+  const rowFor = (step) => {
+    if (rows.has(step.id)) return rows.get(step.id);
+    const item = el('li', 'pstep');
+    item.dataset.state = 'todo';
+    const icon = el('span', 'pstep-icon');
+    icon.append(el('span', 'pstep-dot'));
+    const heading = el('span', 'pstep-title', step.title);
+    const status = el('span', 'sr-only', PANEL_STATE_TEXT.todo);
+    heading.append(status);
+    const time = el('span', 'pstep-time');
+    // De tijd tikt elke halve seconde: die hoort niet in de live-regio.
+    time.setAttribute('aria-hidden', 'true');
+    const message = el('span', 'pstep-message', step.note ? `(${step.note})` : '');
+    item.append(icon, heading, time, message);
+    const entry = { item, icon, heading, status, time, message };
+    rows.set(step.id, entry);
+    // Optionele fasen komen op hun vaste plek in de lijst, pas als de server ze meldt.
+    const order = plan.findIndex((candidate) => candidate.id === step.id);
+    const next = [...rows.entries()]
+      .filter(([id]) => plan.findIndex((candidate) => candidate.id === id) > order)
+      .map(([, value]) => value.item)
+      .find((node) => node.isConnected);
+    if (next && order >= 0) list.insertBefore(item, next);
+    else list.append(item);
+    return entry;
+  };
+
+  plan.filter((step) => !step.optional).forEach(rowFor);
+
+  const setState = (id, state, text) => {
+    const step = plan.find((candidate) => candidate.id === id) || { id, title: text || id };
+    const entry = rowFor(step);
+    entry.item.dataset.state = state;
+    entry.status.textContent = PANEL_STATE_TEXT[state] || '';
+    if (state === 'active') entry.item.setAttribute('aria-current', 'step');
+    else entry.item.removeAttribute('aria-current');
+    entry.icon.innerHTML = state === 'active' ? SPINNER_SVG : state === 'done' ? CHECK_SVG : '<span class="pstep-dot"></span>';
+    if (text) entry.message.textContent = text;
+    if (state === 'active') startedAt.set(id, Date.now());
+    if (state === 'done' && startedAt.has(id)) entry.time.textContent = formatSeconds(Date.now() - startedAt.get(id));
+  };
+
+  const tick = setInterval(() => {
+    for (const [id, entry] of rows) {
+      if (entry.item.dataset.state === 'active' && startedAt.has(id)) entry.time.textContent = formatSeconds(Date.now() - startedAt.get(id));
+    }
+  }, 500);
+
+  return {
+    node: wrapper,
+    /** Eén regel van de server verwerken. */
+    update(message) {
+      setState(message.step, message.state, message.message);
+      if (message.data?.source) {
+        badgeRow.replaceChildren(sourceBadge(message.data, { detail: true }));
+        badgeRow.classList.remove('hidden');
+        setSourceBadge(message.data);
+      }
+      // Geen match: de laatste fase is dan niet nodig.
+      if (message.step === 'intent' && message.state === 'done' && /geen match/i.test(message.message || '') && rows.has('aanbevelingen')) {
+        const entry = rows.get('aanbevelingen');
+        entry.item.dataset.state = 'skipped';
+        entry.status.textContent = PANEL_STATE_TEXT.skipped;
+        entry.message.textContent = 'niet nodig: eerst een beter zoekwoord';
+      }
+    },
+    /** Zolang de server nog niets meldde, staat de eerste fase al op bezig. */
+    start() {
+      setState(plan[0].id, 'active');
+    },
+    stop() {
+      clearInterval(tick);
+    },
+  };
+}
+
+function formatSeconds(ms) {
+  const seconds = ms / 1000;
+  return seconds < 60 ? `${seconds.toFixed(seconds < 10 ? 1 : 0).replace('.', ',')} s` : formatDuration(ms);
+}
+
+let activePanel = null;
+
+function startPanel(plan, options) {
+  activePanel?.stop();
+  activePanel = createProgressPanel(plan, options);
+  activePanel.start();
+  return activePanel;
+}
+
+// --- Welke data is gebruikt? -------------------------------------------------------------------
+
+/** Korte redenen voor de badge in de kaartkop, waar weinig ruimte is. */
+const GSC_REASONS_SHORT = {
+  geen_toegang: 'geen GSC-toegang',
+  niet_ingesteld: 'GSC niet gekoppeld',
+  leeg: 'geen GSC-vertoningen',
+};
+
+const GSC_REASONS = {
+  geen_toegang: 'geen GSC-toegang voor dit domein',
+  niet_ingesteld: 'Search Console niet gekoppeld',
+  leeg: 'geen vertoningen in Search Console',
+  sleutel_ongeldig: 'de Google-sleutel werd geweigerd',
+  api_uit: 'de Search Console API staat uit',
+  limiet: 'Search Console gaf een limiet',
+  timeout: 'Search Console reageerde niet op tijd',
+  fout: 'Search Console gaf een fout',
+};
+
+/**
+ * Wat de marketeer moet weten over de bron: diepe, gemeten data van een klant,
+ * of de globale schatting. Gebaseerd op de vlaggen van de server
+ * (source, gsc_error, gsc.status).
+ */
+function sourceBadgeInfo(info) {
+  if (!info?.source) return null;
+  // Oude opgeslagen herfocussen: 'gsc' was een eigen export, 'ahrefs' de schatting.
+  const source = { gsc: 'gsc_upload', ahrefs: 'ahrefs_only' }[info.source] || info.source;
+  switch (source) {
+    case 'hybrid_gsc_ahrefs':
+    case 'gsc_only':
+      return { icon: '⚡', text: 'diepe GSC-data ingeladen (Pure Minds-klant)', short: 'diepe GSC-data', tone: 'pill-good' };
+    case 'gsc_upload':
+      return { icon: '📄', text: 'eigen Search Console-export ingeladen', short: 'eigen GSC-export', tone: 'pill-good' };
+    case 'serp_only':
+      return { icon: '🌐', text: 'alleen de Google-top 10 (geen Ahrefs, geen Search Console)', short: 'alleen Google-top 10', tone: 'pill-mid' };
+    default: {
+      const reason = GSC_REASONS[info.gsc?.status] || 'Search Console niet gebruikt';
+      const short = GSC_REASONS_SHORT[info.gsc?.status] || (info.gsc_error ? 'GSC-fout' : 'zonder GSC');
+      return { icon: '🌐', text: `globale data gebruikt (${reason})`, short: `globale data · ${short}`, tone: info.gsc_error ? 'pill-mid' : 'pill' };
+    }
+  }
+}
+
+function sourceBadge(info, { detail = false, compact = false } = {}) {
+  const badge = sourceBadgeInfo(info);
+  const wrap = el('span', 'inline-flex flex-col gap-1 max-w-full');
+  if (!badge) return wrap;
+  const pill = el('span', `pill source-pill ${badge.tone}`);
+  pill.append(el('span', 'source-icon', badge.icon), el('span', null, compact ? badge.short : badge.text));
+  pill.firstChild.setAttribute('aria-hidden', 'true');
+  wrap.append(pill);
+  // Compact of niet: de volledige uitleg staat altijd in de tooltip.
+  pill.title = [badge.text, info.gsc?.message].filter(Boolean).join('. ');
+  if (info.gsc?.message) {
+    if (detail) wrap.append(el('span', 'text-xs leading-5 text-pm-muted', info.gsc.message));
+  }
+  return wrap;
+}
+
+/** De badge in de kaartkop: altijd zichtbaar welke data het huidige rapport draagt. */
+function setSourceBadge(info) {
+  const badge = sourceBadgeInfo(info);
+  sourceBadgeSlot.classList.toggle('hidden', !badge);
+  sourceBadgeSlot.replaceChildren(badge ? sourceBadge(info, { compact: true }) : '');
+}
+
+// --- Regio kiezen ----------------------------------------------------------------------------
+
+function selectedRegion() {
+  return REGION_INFO[regionRadios.find((radio) => radio.checked)?.value] || REGION_INFO.nl;
+}
+
+/** Eén regio voor het formulier en de zoekwoordbalk, zodat ze nooit iets anders zeggen. */
+function setSelectedRegion(id) {
+  const region = REGION_INFO[id] || REGION_INFO.nl;
+  regionRadios.forEach((radio) => { radio.checked = radio.value === region.id; });
+  recheckRegion.value = region.id;
+  storageSet(STORAGE.region, region.id);
+  return region;
+}
+
+// --- Altijd een ander zoekwoord kunnen proberen ------------------------------------------------
+
+/** De pagina waarvoor de zoekwoordbalk werkt: die van het laatste rapport of van de lopende analyse. */
+let recheckUrl = '';
+
+function showRecheck(url, keyword, region) {
+  recheckUrl = url;
+  recheckForm.classList.remove('hidden');
+  // Niet overschrijven terwijl de marketeer zelf aan het typen is.
+  if (keyword && document.activeElement !== recheckKeyword) recheckKeyword.value = keyword;
+  // De regio volgt het rapport dat in beeld is, in de balk én in het formulier.
+  if (region) setSelectedRegion(region.id);
+  const hint = `Voor ${url}. Een ander zoekwoord proberen kan altijd, ook tijdens een analyse: die wordt dan afgebroken.`;
+  recheckHint.textContent = hint;
+  recheckHint.title = hint;
+}
+
+function hideRecheck() {
+  clearRecheckError();
+  recheckUrl = '';
+  recheckForm.classList.add('hidden');
+}
+
+recheckForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  const keyword = recheckKeyword.value.trim();
+  if (!keyword || !recheckUrl) {
+    recheckKeyword.setAttribute('aria-invalid', 'true');
+    recheckError.textContent = 'Typ eerst een zoekwoord.';
+    recheckKeyword.focus();
+    return;
+  }
+  clearRecheckError();
+  const region = setSelectedRegion(recheckRegion.value);
+  lastRefocus = null;
+  storageRemove(STORAGE.refocus);
+  runAnalysis({ url: recheckUrl, keyword, region, origin: { source: 'handmatig', round: 0 } });
+});
+
+recheckRegion.addEventListener('change', () => setSelectedRegion(recheckRegion.value));
+
+function clearRecheckError() {
+  recheckKeyword.removeAttribute('aria-invalid');
+  recheckError.textContent = '';
+}
+
+recheckKeyword.addEventListener('input', clearRecheckError);
 
 // --- De flow ---------------------------------------------------------------------
 
@@ -252,18 +600,18 @@ form.addEventListener('submit', (event) => {
   // Een nieuwe handmatige analyse begint een nieuwe flow: een vorige herfocus hoort er niet bij.
   lastRefocus = null;
   storageRemove(STORAGE.refocus);
-  runAnalysis({ url, keyword, origin: { source: 'handmatig', round: 0 } });
+  runAnalysis({ url, keyword, region: selectedRegion(), origin: { source: 'handmatig', round: 0 } });
 });
 
 /**
  * Stap 1 en 2 (en bij een match 3A): één aanroep van /api/analyze.
  *
  * `keepOutput`: na een herfocus blijft de kaart met het gekozen zoekwoord in
- * beeld en komt het skelet eronder. Zo lees je de onderbouwing terwijl de
+ * beeld, met de voortgang erboven. Zo lees je de onderbouwing terwijl de
  * tweede analyse loopt, in plaats van dat hij meteen verdwijnt.
  */
-async function runAnalysis({ url, keyword, origin }, { keepOutput = false } = {}) {
-  if (isLoading) return;
+async function runAnalysis({ url, keyword, origin, region = selectedRegion() }, { keepOutput = false } = {}) {
+  const run = beginRun();
   retryAfterPassword = null;
 
   setLoading(true, origin.round > 0 ? `analyse met "${keyword}"` : 'bezig met analyseren');
@@ -272,17 +620,29 @@ async function runAnalysis({ url, keyword, origin }, { keepOutput = false } = {}
     { state: origin.round > 0 ? 'done' : 'todo', text: 'focus zoekwoord' },
     { state: 'todo', text: 'aanbevelingen' },
   ]);
+  setSourceBadge(null);
+  showRecheck(url, keyword, region);
+
+  const panel = startPanel(ANALYZE_PLAN, {
+    title: `Bezig met "${keyword}"`,
+    subtitle: `Google ${region.label} · ${url}`,
+  });
   if (keepOutput) {
+    // Voortgang bovenaan, de gekozen zoekwoordkaart eronder: zo zie je allebei.
     actions.replaceChildren();
-    output.append(skeletonNode());
+    output.prepend(panel.node);
   } else {
-    showSkeleton();
+    showSkeleton(panel);
   }
   resultScroll.scrollTop = 0;
   if (!isDesktop()) resultCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
   try {
-    const report = await postJson('/api/analyze', { url, keyword, origin });
+    const report = await postStream('/api/analyze', { url, keyword, origin, region: region.id }, {
+      signal: run.controller.signal,
+      onProgress: (message) => { if (isCurrent(run)) panel.update(message); },
+    });
+    if (!isCurrent(run)) return;
     lastReport = report;
     storageSet(STORAGE.report, JSON.stringify(report));
 
@@ -290,6 +650,7 @@ async function runAnalysis({ url, keyword, origin }, { keepOutput = false } = {}
     // de heranalyse, dan staat de invoer nog op wat de marketeer zelf koos.
     urlField.value = url;
     keywordField.value = keyword;
+    setSelectedRegion(report.region || region.id);
     updateFieldState();
     storageSet(STORAGE.draft, JSON.stringify(FIELDS.map((field) => field.value)));
 
@@ -297,15 +658,20 @@ async function runAnalysis({ url, keyword, origin }, { keepOutput = false } = {}
     if (report.stage === 'compleet') setStatus('done', 'klaar');
     else setStatus('warn', 'geen match');
   } catch (error) {
+    if (error.code === ABORTED || !isCurrent(run)) return;
     if (error.code === 'auth_required') {
       if (lastReport) renderReport(lastReport);
       else showEmpty();
-      askForPassword(error.message, () => runAnalysis({ url, keyword, origin }));
+      askForPassword(error.message, () => runAnalysis({ url, keyword, origin, region }));
     } else {
       renderError(error);
     }
   } finally {
-    setLoading(false);
+    if (isCurrent(run)) {
+      endRun(run);
+      panel.stop();
+      setLoading(false);
+    }
   }
 }
 
@@ -313,11 +679,17 @@ async function runAnalysis({ url, keyword, origin }, { keepOutput = false } = {}
 async function runRefocus({ source, gscText }) {
   const report = lastReport;
   if (!report || report.stage !== 'intent' || isLoading) return;
+  const run = beginRun();
+  const region = regionOf(report);
   retryAfterPassword = null;
   if (source === 'gsc' && gscText) rememberGsc(gscText);
 
   setLoading(true, 'beter zoekwoord zoeken');
-  renderReport(report, { refocusBusy: true });
+  const panel = startPanel(REFOCUS_PLAN, {
+    title: 'Bezig met een beter zoekwoord zoeken',
+    subtitle: source === 'gsc' ? 'Uit je Search Console-export' : `Search Console en Ahrefs · Google ${region.label}`,
+  });
+  renderReport(report, { refocusBusy: true, panel });
   setSteps([
     { state: 'done', text: 'intent check: geen match' },
     { state: 'active', text: 'focus zoekwoord zoeken' },
@@ -327,15 +699,22 @@ async function runRefocus({ source, gscText }) {
 
   let result;
   try {
-    result = await postJson('/api/refocus', {
+    result = await postStream('/api/refocus', {
       url: report.page.url,
       keyword: report.keyword,
       intent: report.intent,
       source,
       gsc: gscText || '',
       round: report.origin.round,
+      region: region.id,
+    }, {
+      signal: run.controller.signal,
+      onProgress: (message) => { if (isCurrent(run)) panel.update(message); },
     });
   } catch (error) {
+    if (error.code === ABORTED || !isCurrent(run)) return;
+    endRun(run);
+    panel.stop();
     setLoading(false);
     if (error.code === 'auth_required') {
       renderReport(report);
@@ -346,6 +725,9 @@ async function runRefocus({ source, gscText }) {
     scrollToRefocus();
     return;
   }
+  if (!isCurrent(run)) return;
+  endRun(run);
+  panel.stop();
   setLoading(false);
 
   lastRefocus = result;
@@ -365,6 +747,7 @@ async function runRefocus({ source, gscText }) {
     {
       url: report.page.url,
       keyword: result.choice.keyword,
+      region,
       origin: {
         source: result.choice.source,
         previousKeyword: report.keyword,
@@ -404,6 +787,7 @@ function analyseWithButton(keyword, source, why, report) {
     runAnalysis({
       url: report.page.url,
       keyword,
+      region: regionOf(report),
       origin: {
         source,
         previousKeyword: lastRefocus?.rejectedKeyword || report.keyword,
@@ -437,6 +821,8 @@ function renderReport(report, options = {}) {
   output.replaceChildren(...cards);
   output.className = 'space-y-4';
   actions.replaceChildren(copyButton(() => toMarkdown(report), 'kopieer rapport', 'btn btn-outline btn-sm relative'));
+  setSourceBadge(report);
+  if (report.page?.url) showRecheck(report.page.url, report.keyword, regionOf(report));
 
   // Tijdens de herfocus loopt er nog een aanvraag: voortgangsbalk en stappen
   // blijven dan zoals runRefocus ze zette.
@@ -548,6 +934,15 @@ function intentCard(report) {
     metaRow(facts, 'Zoekvolume (Ahrefs)', missingVolumeText(report));
   }
   metaRow(facts, 'Jouw pagina in de top 10', measured.ownPosition ? `ja, positie ${measured.ownPosition}` : 'nee');
+  metaRow(facts, 'Regio', `Google ${regionOf(report).label} · teksten in het ${regionOf(report).language}`);
+  if (report.source) {
+    const row = el('div', 'min-w-0 sm:col-span-2');
+    row.append(el('dt', 'text-xs font-bold uppercase tracking-wide text-pm-muted', 'Databron'));
+    const value = el('dd', 'text-sm mt-1');
+    value.append(sourceBadge(report, { detail: true }));
+    row.append(value);
+    facts.append(row);
+  }
   if (measured.topKeywords.length) {
     metaRow(
       facts,
@@ -619,8 +1014,8 @@ function refocusCard(report, options = {}) {
   const earlier = previousRoundOptions(report);
 
   if (options.refocusBusy) {
-    body.append(el('p', 'notice text-sm', 'Bezig met zoeken naar een passend zoekwoord. Dit duurt ongeveer een halve minuut.'));
-    body.append(el('div', 'shimmer h-4 w-2/3'), el('div', 'shimmer h-4 w-1/2'));
+    if (options.panel) body.append(options.panel.node);
+    else body.append(el('p', 'notice text-sm', 'Bezig met zoeken naar een passend zoekwoord. Dit duurt ongeveer een halve minuut.'));
   } else if (result) {
     body.append(refocusResult(result, report, { autoStart: options.autoStart }));
   } else if (report.nextStep === 'refocus') {
@@ -804,6 +1199,7 @@ function refocusResult(result, report, options = {}) {
   const box = el('div', 'space-y-4');
   const listSource = listSourceOf(result);
 
+  if (result.source) box.append(sourceBadge(result, { detail: false }));
   box.append(el('p', 'notice text-xs leading-5 text-pm-muted', result.note));
   if (result.pageSummary) {
     const summary = el('p', 'text-sm leading-6');
@@ -823,7 +1219,7 @@ function refocusResult(result, report, options = {}) {
     choice.append(pills);
     if (result.choice.why) choice.append(el('p', 'text-sm leading-6', result.choice.why));
     if (options.autoStart) {
-      choice.append(el('p', 'text-xs text-pm-muted', 'De analyse met dit zoekwoord loopt nu. Het rapport verschijnt hieronder.'));
+      choice.append(el('p', 'text-xs text-pm-muted', 'De analyse met dit zoekwoord loopt nu; de voortgang staat hierboven.'));
     } else if (!options.done) {
       // Na een refresh of een mislukte heranalyse loopt er niets: dan starten we op verzoek.
       const next = el('div', 'flex flex-wrap items-center gap-2 text-xs text-pm-muted');
@@ -881,7 +1277,7 @@ function refocusResult(result, report, options = {}) {
     table.append(head, rows);
     const wrap = el('div', 'table-wrap');
     wrap.append(table);
-    const legend = el('p', 'mt-2 text-xs leading-5 text-pm-muted', 'GSC = Search Console, gemeten over 90 dagen. Ahrefs = schatting. Positie: gem. = gemiddelde in Search Console, ~ = beste positie in Nederland volgens Ahrefs.');
+    const legend = el('p', 'mt-2 text-xs leading-5 text-pm-muted', tableLegend(result));
     const topNote = result.rowCount > result.rows.length ? ` (top ${result.rows.length})` : '';
     box.append(details(`Bekijk de ${result.rowCount} zoekwoorden uit de lijst${topNote}`, [wrap, legend]));
   }
@@ -899,6 +1295,35 @@ function refocusResult(result, report, options = {}) {
   }
 
   return box;
+}
+
+/**
+ * De uitleg onder de zoekwoordtabel, opgebouwd uit wat er werkelijk gemeten is:
+ * een eigen export heeft een onbekende periode en onbekende landen, en een lijst
+ * zonder landfilter telt alle landen samen. Elk deel staat er alleen als de
+ * tabel zo'n rij of kolom echt bevat.
+ */
+function tableLegend(result) {
+  const region = regionOf(result);
+  const source = { gsc: 'gsc_upload', ahrefs: 'ahrefs_only' }[result.source] || result.source;
+  const rows = result.rows || [];
+  // Rijen uit een oud rapport hebben geen origin; die komen uit Search Console.
+  const measured = rows.filter((row) => row.origin !== 'ahrefs');
+  const parts = [];
+  if (source === 'gsc_upload') {
+    parts.push('GSC = je eigen Search Console-export (periode en landen van de export).');
+  } else if (result.gsc?.startDate && measured.length) {
+    const where = result.gsc.country ? `alleen ${region.label}` : 'alle landen samen';
+    parts.push(`GSC = Search Console, gemeten van ${result.gsc.startDate} t/m ${result.gsc.endDate}, ${where}.`);
+  }
+  if (rows.some((row) => row.origin === 'ahrefs' || row.origin === 'gsc+ahrefs' || row.volume != null)) {
+    parts.push(`Ahrefs = schatting voor ${region.label}; het volume komt altijd van Ahrefs.`);
+  }
+  const positions = [];
+  if (measured.some((row) => row.position != null)) positions.push('gem. = gemiddelde in Search Console');
+  if (rows.some((row) => row.origin === 'ahrefs' && row.position != null)) positions.push(`~ = beste positie in ${region.label} volgens Ahrefs`);
+  if (positions.length) parts.push(`Positie: ${positions.join(', ')}.`);
+  return parts.join(' ');
 }
 
 /** Op een telefoon staat de bron onder het zoekwoord: een eigen kolom past daar niet. */
@@ -926,7 +1351,7 @@ function candidateList(title, items, source, report, { withButtons = true } = {}
     const left = el('div', 'flex flex-wrap items-center gap-1.5');
     left.append(el('span', 'text-sm font-bold', item.keyword));
     if (item.fit) left.append(el('span', `pill ${item.fit === 'goed' ? 'pill-good' : 'pill-mid'}`, `past ${item.fit}`));
-    if (typeof item.volume === 'number') left.append(el('span', 'pill', `${fmt(item.volume)} per maand (Ahrefs, NL)`));
+    if (typeof item.volume === 'number') left.append(el('span', 'pill', `${fmt(item.volume)} per maand (Ahrefs, ${regionOf(report).short})`));
     else if (source === 'ai') left.append(el('span', 'pill pill-bad', 'geen volume bekend'));
     const origin = item.row?.origin || (item.source === 'ahrefs' ? 'ahrefs' : item.source === 'gsc' ? 'gsc' : null);
     if (ORIGIN_LABELS[origin]) left.append(el('span', `pill ${ORIGIN_LABELS[origin].pill}`, ORIGIN_LABELS[origin].text));
@@ -1534,6 +1959,8 @@ function toMarkdown(report) {
     `**Focus zoekwoord:** ${report.keyword}${origin.source !== 'handmatig' ? ` (${SOURCE_LABELS[origin.source] || origin.source}, vervangt "${origin.previousKeyword}")` : ''}`,
     `**Positie in Google:** ${serp.targetPosition ? `#${serp.targetPosition}` : 'niet in de top 10'}`,
     `**Geanalyseerd op:** ${new Date(report.generatedAt).toLocaleString('nl-NL')} (${serp.provider})`,
+    `**Regio:** Google ${regionOf(report).label}, teksten in het ${regionOf(report).language}`,
+    ...(sourceBadgeInfo(report) ? [`**Databron:** ${sourceBadgeInfo(report).text}${report.gsc?.message ? ` (${report.gsc.message})` : ''}`] : []),
     '',
     `## Beoordeling focus keyword: ${report.keyword}`,
     '',
@@ -1696,6 +2123,8 @@ function showEmpty() {
   actions.replaceChildren();
   progressBar.classList.add('hidden');
   setStatus(null);
+  setSourceBadge(null);
+  hideRecheck();
   setSteps([
     { state: 'todo', text: 'intent check' },
     { state: 'todo', text: 'focus zoekwoord' },
@@ -1707,9 +2136,9 @@ function skeletonNode() {
   return document.getElementById('loading-state').content.cloneNode(true);
 }
 
-function showSkeleton() {
-  output.className = '';
-  output.replaceChildren(skeletonNode());
+function showSkeleton(panel) {
+  output.className = 'space-y-4';
+  output.replaceChildren(...(panel ? [panel.node] : []), skeletonNode());
   actions.replaceChildren();
   progressBar.classList.remove('hidden');
   progressBar.setAttribute('data-indeterminate', '');
@@ -1745,6 +2174,7 @@ const ERROR_HINTS = {
   gsc_no_queries: 'Controleer of de eerste rij koppen bevat zoals "Meest gebruikte zoekopdrachten", "Klikken" en "Vertoningen".',
   gsc_bad_json: 'Het JSON-bestand is niet geldig. Exporteer als CSV of plak de tabel.',
   offline: 'Controleer je internetverbinding.',
+  stream_cut: 'Een analyse mag maximaal vijf minuten duren. Probeer het opnieuw, of kies een snellere pagina.',
 };
 
 function errorBox(error) {
@@ -1880,6 +2310,7 @@ function setUrlHint(text, className) {
 form.addEventListener('input', () => {
   updateFieldState();
   storageSet(STORAGE.draft, JSON.stringify(FIELDS.map((field) => field.value)));
+  setSelectedRegion(selectedRegion().id);
 });
 
 resetBtn.addEventListener('click', (event) => {
@@ -1895,7 +2326,11 @@ resetBtn.addEventListener('click', (event) => {
   storageRemove(STORAGE.gsc);
   lastGscText = '';
   showEmpty();
-  setTimeout(updateFieldState); // het native reset-event leegt de velden pas na deze handler
+  // Het native reset-event leegt de velden pas na deze handler; daarna ook de regio gelijktrekken.
+  setTimeout(() => {
+    updateFieldState();
+    setSelectedRegion(selectedRegion().id);
+  });
 });
 
 // --- Wachtwoord (alleen als APP_PASSWORD op de server staat) ---------------------
@@ -1949,6 +2384,7 @@ function storageRemove(key) {
     const draft = JSON.parse(storageGet(STORAGE.draft) || '[]');
     FIELDS.forEach((field, i) => { if (typeof draft[i] === 'string') field.value = draft[i]; });
   } catch { /* ongeldige opslag negeren */ }
+  setSelectedRegion(storageGet(STORAGE.region) || 'nl');
   updateFieldState();
 
   try {

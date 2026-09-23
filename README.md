@@ -32,6 +32,8 @@ Functions als back-end. Geen build-stap.
 | `lib/keywordsources.js` | De zoekwoordlijst voor de herfocus: export, of Search Console plus Ahrefs met terugval. |
 | `lib/claude.js` | De gedeelde Claude-aanroep. |
 | `lib/auth.js` | Het optionele wachtwoord, in constante tijd vergeleken. |
+| `lib/region.js` | Regio en taal: Nederland (Nederlands) of Verenigde Staten (Engels). |
+| `lib/progress.js` | Echte voortgang tijdens een analyse, als NDJSON-stroom. |
 | `lib/pagetype.js`, `lib/text.js`, `lib/ratelimit.js` | Paginatypes vertalen, tekstnormalisatie, rate limit. |
 | `test/run.js` | Snelle controles zonder framework: `npm test`. |
 
@@ -52,6 +54,17 @@ Functions als back-end. Geen build-stap.
    Ahrefs-schatting). Claude kiest een passend zoekwoord uit die lijst; staat er niets
    in, dan stelt het zelf zoekwoorden voor die de code op zoekvolume checkt bij Ahrefs.
    Met het gekozen zoekwoord start automatisch een nieuwe analyse, maximaal twee rondes.
+
+**Regio en taal.** Kies Nederland of de Verenigde Staten. Dat bepaalt welke Google de
+tool bekijkt (Ahrefs en Serper), in welke taal pagina's worden opgehaald, op welk
+land Search Console filtert en in welke taal de voorgestelde koppen, H1, meta en
+eerste alinea zijn. De uitleg in het rapport blijft Nederlands.
+
+**Voortgang en bijsturen.** Tijdens een analyse meldt de server elke fase die hij
+afrondt; de UI toont die live, inclusief welke databron gebruikt wordt. Boven de
+resultaten staat een zoekwoordbalk die altijd bewerkbaar is: een ander zoekwoord
+proberen voor dezelfde pagina kan op elk moment, ook tijdens een analyse (die wordt
+dan afgebroken, en de server stopt vóór de dure stappen).
 
 Het rapport volgt de opbouw van onze focus keyword-documenten: beoordeling, focus
 zoekwoord (behouden of nieuw), keyword mapping, optimalisatie, aanbevelingen met
@@ -97,10 +110,13 @@ paginatotaal. Dat werkt alleen voor domeinen waar het service account gebruiker 
 Voor alle andere domeinen valt de tool stilletjes terug op Ahrefs; de analyse loopt
 gewoon door.
 
-**Zet `APP_PASSWORD` als je Search Console koppelt.** Zonder wachtwoord kan iedereen
-met de link van de tool de zoekdata van klanten opvragen. Op een publieke Vercel-deploy
-(production of preview) staat Search Console daarom uit zolang `APP_PASSWORD` leeg is
-(`gsc.status` is dan `niet_beveiligd`). Lokaal werkt het zonder wachtwoord.
+De tool is bedoeld voor intern gebruik binnen het bureau; Search Console werkt ook
+zonder `APP_PASSWORD`. Deel de link daarom niet buiten het bureau: wie hem heeft,
+kan de Search Console-data van klanten opvragen. Wil je de deploy toch afschermen,
+zet dan in Vercel **Deployment Protection** aan of gebruik `APP_PASSWORD`.
+
+Search Console filtert op het land van de gekozen regio (Nederland of de Verenigde
+Staten), zodat de vertoningen bij dezelfde Google horen als de top 10.
 
 1. **Google Cloud-project.** Open [console.cloud.google.com](https://console.cloud.google.com),
    kies of maak een project en zet onder **APIs & Services → Library** de
@@ -141,7 +157,7 @@ Elk antwoord van de API vertelt wat er gebruikt is:
 | `source` | `gsc_upload` | De marketeer heeft zelf een export ingeladen. |
 | `source` | `serp_only` | Alleen de SERP van Serper: geen Ahrefs-sleutel en geen Search Console. |
 | `gsc_error` | `true` | Search Console werd geprobeerd en mislukte, bijvoorbeeld geen toegang. |
-| `gsc.status` | `ok`, `leeg`, `niet_ingesteld`, `niet_beveiligd`, `geen_toegang`, `sleutel_ongeldig`, `api_uit`, `limiet`, `timeout`, `fout` | De precieze reden, met een Nederlandse uitleg in `gsc.message`. |
+| `gsc.status` | `ok`, `leeg`, `niet_ingesteld`, `geen_toegang`, `sleutel_ongeldig`, `api_uit`, `limiet`, `timeout`, `fout` | De precieze reden, met een Nederlandse uitleg in `gsc.message`. |
 
 ## Omgevingsvariabelen
 
@@ -156,4 +172,4 @@ onder **Settings → Environment Variables**.
 | `GOOGLE_PRIVATE_KEY` | nee | Private key van het service account. Zie hieronder voor het formaat. |
 | `SERP_PROVIDER` | nee | `ahrefs` (standaard) of `serper`. |
 | `SERPER_API_KEY` | nee | Alleen bij `SERP_PROVIDER=serper`: de live top 10 zonder paginatypes. |
-| `APP_PASSWORD` | nee, wel voor Search Console | Zet je die, dan vraagt de tool eenmalig om een wachtwoord. Verplicht op Vercel zodra Search Console gekoppeld is. |
+| `APP_PASSWORD` | nee | Zet je die, dan vraagt de tool eenmalig om een wachtwoord. |

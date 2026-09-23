@@ -15,6 +15,9 @@
  *   3B. Geen match: het antwoord stopt na de intent check; de frontend biedt
  *      dan de herfocus aan (api/refocus.js).
  *
+ * Alles gebeurt in de gekozen regio (lib/region.js). Vraagt de browser erom,
+ * dan meldt het endpoint elke fase terwijl hij bezig is (lib/progress.js).
+ *
  * Sleutels leven alleen hier, nooit in de browser.
  */
 
@@ -33,6 +36,8 @@ import {
 import { describePageType } from '../lib/pagetype.js';
 import { fetchPageQueries, GSC_STATUS } from '../lib/searchconsole.js';
 import { sourceFlags, gscSummary, pageInsight } from '../lib/hybrid.js';
+import { readRegion } from '../lib/region.js';
+import { createProgress } from '../lib/progress.js';
 import { normalize } from '../lib/text.js';
 import { clientKey, withinRateLimit } from '../lib/ratelimit.js';
 import { passwordOk } from '../lib/auth.js';
@@ -75,6 +80,11 @@ function optional(promise, label) {
   );
 }
 
+/** Wat de frontend over de bron moet weten, zodra het bekend is: ook al tijdens het laden. */
+function sourceInfo(gsc, flags) {
+  return { source: flags.source, gsc_error: flags.gsc_error, gsc: gscSummary(gsc) };
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     res.status(405).json({ error: 'Alleen POST wordt ondersteund.', code: 'method_not_allowed' });
@@ -82,6 +92,7 @@ export default async function handler(req, res) {
   }
 
   res.setHeader('Cache-Control', 'no-store');
+  const progress = createProgress(req, res);
 
   try {
     // Wachtwoord is optioneel: staat APP_PASSWORD niet ingesteld, dan is de tool open.
@@ -105,6 +116,7 @@ export default async function handler(req, res) {
     const url = String(body.url ?? '').trim();
     const keyword = String(body.keyword ?? '').trim();
     const origin = readOrigin(body.origin);
+    const region = readRegion(body.region);
 
     if (!url || !keyword) {
       throw fail(400, 'missing_input', 'Vul zowel de doel-URL als het focus zoekwoord in.');
@@ -115,34 +127,43 @@ export default async function handler(req, res) {
 
     const startedAt = Date.now();
 
-    // Doelpagina, SERP en zoekwoordcijfers tegelijk: ze hangen niet van elkaar af.
+    // --- Stap 1: verzamelen ------------------------------------------------------------
+    progress.step('bronnen', 'active', `Pagina, Google-top 10 (${region.label}) en zoekwoordcijfers ophalen`);
     const [target, serp, keywordLookup] = await Promise.all([
-      fetchPage(url),
-      fetchSerp(keyword, serpAccess),
+      fetchPage(url, { acceptLanguage: region.acceptLanguage }),
+      fetchSerp(keyword, { ...serpAccess, region }),
       ahrefsKey
-        ? optional(fetchKeywordOverview([keyword], { apiKey: ahrefsKey }), 'Zoekwoordcijfers')
+        ? optional(fetchKeywordOverview([keyword], { apiKey: ahrefsKey, country: region.ahrefsCountry }), 'Zoekwoordcijfers')
         : Promise.resolve({ value: null, error: null }),
     ]);
     const keywordInfo = keywordLookup.value ? keywordLookup.value.get(normalize(keyword)) || null : null;
+    progress.step('bronnen', 'done', `Top 10 opgehaald: ${serp.organic.length} resultaten. Jouw pagina: ${target.wordCount.toLocaleString('nl-NL')} woorden.`);
+
+    // Afgehaakt tijdens het ophalen? Dan geen Ahrefs-ideeën en geen concurrenten meer.
+    progress.throwIfGone();
 
     // De zoekwoordideeën zijn pas nodig bij een match, maar starten nu al: dan
     // staan ze klaar zodra de intent check klaar is. Bij een mismatch kost dat
     // een paar honderd Ahrefs-units, tegenover een halve minuut wachten bij een match.
     const ideasPromise = ahrefsKey
-      ? optional(fetchKeywordIdeas(keyword, { apiKey: ahrefsKey }), 'Zoekwoordideeën')
+      ? optional(fetchKeywordIdeas(keyword, { apiKey: ahrefsKey, country: region.ahrefsCountry }), 'Zoekwoordideeën')
       : Promise.resolve({ value: [], error: null });
 
     // Search Console wil de definitieve URL na redirects, dus pas na de pagina. Het loopt
     // parallel met de top 10 en gooit nooit: bij geen toegang komt er een status terug.
-    const gscPromise = fetchPageQueries(target.url, { env: process.env });
-
-    const [serpResults, gsc] = await Promise.all([fetchCompetitors(serp.organic, target), gscPromise]);
+    progress.step('lezen', 'active', 'Concurrenten lezen en Search Console raadplegen');
+    const gscPromise = fetchPageQueries(target.url, { env: process.env, region });
+    const [serpResults, gsc] = await Promise.all([
+      fetchCompetitors(serp.organic, target, { acceptLanguage: region.acceptLanguage }),
+      gscPromise,
+    ]);
     const compared = serpResults.filter((result) => result.status === 'vergeleken');
     const gscInsight = pageInsight(gsc, keyword);
     // Ahrefs telt als gebruikt als de SERP of de zoekwoordcijfers van Ahrefs komen;
     // bij een match komen de zoekwoordideeën er later nog bij.
     const ahrefsInIntent = serp.provider === 'ahrefs' || Boolean(keywordInfo);
     const flags = sourceFlags(gsc, { ahrefsUsed: ahrefsInIntent });
+    progress.step('lezen', 'done', `${compared.length} van ${serp.organic.length} concurrenten gelezen. Search Console: ${gsc.message}`, sourceInfo(gsc, flags));
 
     if (compared.length < MIN_COMPETITORS) {
       throw fail(
@@ -152,24 +173,28 @@ export default async function handler(req, res) {
       );
     }
 
-    const providerLabel = describeSerpProvider(serp.provider, serp.updatedAt);
+    const providerLabel = describeSerpProvider(serp.provider, serp.updatedAt, region);
     const measured = measureSerp({ serp, serpResults });
     const placement = keywordPlacement(target, keyword);
 
     // --- Stap 2: intent check ------------------------------------------------------
+    progress.throwIfGone();
+    progress.step('intent', 'active', 'Claude beoordeelt of je pagina past bij de zoekintentie');
     const client = createClient();
     const intentAnswer = await askClaude(client, {
       system: INTENT_SYSTEM_PROMPT,
       schema: INTENT_SCHEMA,
-      message: buildIntentMessage({ keyword, target, serp, serpResults, keywordInfo, measured, providerLabel, gsc, gscInsight }),
+      message: buildIntentMessage({ keyword, target, serp, serpResults, keywordInfo, measured, providerLabel, gsc, gscInsight, region }),
       maxTokens: 4_000,
       effort: 'medium',
     });
     const intent = verifyIntent(intentAnswer.data, { serp });
+    progress.step('intent', 'done', intent.match ? 'Match: de pagina past bij dit zoekwoord' : 'Geen match: de pagina past niet bij dit zoekwoord');
 
     const base = {
       keyword,
       origin,
+      region: region.id,
       generatedAt: new Date().toISOString(),
       serp: serpSummary(serp, serpResults, providerLabel),
       page: pageSummary(target),
@@ -189,13 +214,14 @@ export default async function handler(req, res) {
     if (!intent.match) {
       log('Intent check: geen match', startedAt, {
         zoekwoord: keyword,
+        regio: region.id,
         ronde: origin.round,
         mismatch: intent.mismatch?.kind,
         gsc: gsc.status,
         input_tokens: intentAnswer.usage?.input_tokens,
         output_tokens: intentAnswer.usage?.output_tokens,
       });
-      res.status(200).json({
+      progress.send(200, {
         stage: 'intent',
         ...base,
         nextStep: origin.round >= MAX_ROUNDS ? 'handmatig' : 'refocus',
@@ -204,9 +230,11 @@ export default async function handler(req, res) {
     }
 
     // --- Stap 3A: content gap, keyword mapping en optimalisatie --------------------------
+    progress.throwIfGone();
+    progress.step('aanbevelingen', 'active', 'Claude schrijft de aanbevelingen: onderwerpen, termen en keyword mapping');
     const ideas = await ideasPromise;
     const mapping = mappingCandidates(ideas.value || [], serp, keyword, gsc.status === GSC_STATUS.ok ? gsc.rows : []);
-    const candidates = termCandidates(compared.map((competitor) => competitor.page), target, keyword);
+    const candidates = termCandidates(compared.map((competitor) => competitor.page), target, keyword, { region });
     const questions = collectQuestions(serp.peopleAlsoAsk, compared);
     const pageTypeOf = (raw) => describePageType(raw)?.label || raw;
 
@@ -217,14 +245,14 @@ export default async function handler(req, res) {
       askClaude(client, {
         system: GAP_TOPICS_SYSTEM_PROMPT,
         schema: GAP_TOPICS_SCHEMA,
-        message: buildGapTopicsMessage({ keyword, target, compared, questions, intent, pageTypeOf }),
+        message: buildGapTopicsMessage({ keyword, target, compared, questions, intent, pageTypeOf, region }),
         maxTokens: 16_000,
         effort: 'medium',
       }),
       askClaude(client, {
         system: GAP_TERMS_SYSTEM_PROMPT,
         schema: GAP_TERMS_SCHEMA,
-        message: buildGapTermsMessage({ keyword, target, compared, candidates, intent, placement, mappingCandidates: mapping, pageTypeOf }),
+        message: buildGapTermsMessage({ keyword, target, compared, candidates, intent, placement, mappingCandidates: mapping, pageTypeOf, region }),
         maxTokens: 8_000,
         effort: 'medium',
       }),
@@ -235,10 +263,12 @@ export default async function handler(req, res) {
       model: { ...topicsAnswer.data, ...termsAnswer.data },
       mappingCandidates: mapping, placement, providerLabel,
     });
+    progress.step('aanbevelingen', 'done', `${report.coverage.topicsTotal} onderwerpen en ${report.coverage.termsTotal} termen gecontroleerd tegen de bronnen`);
 
     const usage = [intentAnswer, topicsAnswer, termsAnswer].map((answer) => answer.usage || {});
     log('Analyse afgerond', startedAt, {
       zoekwoord: keyword,
+      regio: region.id,
       ronde: origin.round,
       vergeleken: compared.length,
       mislukt: serpResults.filter((result) => result.status === 'mislukt').length,
@@ -253,14 +283,18 @@ export default async function handler(req, res) {
     });
 
     const finalFlags = sourceFlags(gsc, { ahrefsUsed: ahrefsInIntent || (ideas.value || []).length > 0 });
-    res.status(200).json({ stage: 'compleet', ...base, ...report, ...finalFlags, ideasError: ideas.error });
+    progress.send(200, { stage: 'compleet', ...base, ...report, ...finalFlags, ideasError: ideas.error });
   } catch (error) {
+    if (error.code === 'client_gone') {
+      console.log('Analyse afgebroken: de gebruiker startte iets anders.');
+      return;
+    }
     if (error.code && error.status) {
-      res.status(error.status).json({ error: error.message, code: error.code });
+      progress.send(error.status, { error: error.message, code: error.code });
       return;
     }
     console.error('Analyse mislukt:', error);
-    res.status(502).json({ error: describeClaudeError(error), code: 'analysis_failed' });
+    progress.send(502, { error: describeClaudeError(error), code: 'analysis_failed' });
   }
 }
 

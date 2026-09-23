@@ -15,6 +15,8 @@
  *      voorstel krijgt pas een plek als Ahrefs er zoekvolume voor kent.
  *
  * De frontend start daarna zelf een nieuwe analyse met het gekozen zoekwoord.
+ * Alles gebeurt in de gekozen regio; vraagt de browser erom, dan meldt het
+ * endpoint elke fase terwijl hij bezig is (lib/progress.js).
  */
 
 import { fetchPage, fail } from '../lib/page.js';
@@ -27,6 +29,8 @@ import {
 import { normalize } from '../lib/text.js';
 import { clientKey, withinRateLimit } from '../lib/ratelimit.js';
 import { passwordOk } from '../lib/auth.js';
+import { readRegion } from '../lib/region.js';
+import { createProgress } from '../lib/progress.js';
 
 const MAX_KEYWORD_CHARS = 120;
 const MAX_ROWS_FOR_MODEL = 100;
@@ -76,6 +80,7 @@ export default async function handler(req, res) {
   }
 
   res.setHeader('Cache-Control', 'no-store');
+  const progress = createProgress(req, res);
 
   try {
     // Wachtwoord is optioneel: staat APP_PASSWORD niet ingesteld, dan is de tool open.
@@ -97,6 +102,7 @@ export default async function handler(req, res) {
     const mode = body.source === 'gsc' ? 'upload' : 'auto';
     const intent = readIntent(body.intent);
     const round = Math.min(Math.max(Number.parseInt(body.round, 10) || 0, 0), 9);
+    const region = readRegion(body.region);
     const ahrefsKey = process.env.AHREFS_API_KEY || null;
 
     if (!url || !rejectedKeyword) {
@@ -106,39 +112,62 @@ export default async function handler(req, res) {
     const startedAt = Date.now();
 
     // --- 1. De pagina: eerst, want Search Console wil de definitieve URL na redirects ---
-    const target = await fetchPage(url);
+    progress.step('pagina', 'active', 'Pagina opnieuw ophalen');
+    const target = await fetchPage(url, { acceptLanguage: region.acceptLanguage });
+    progress.step('pagina', 'done', `Pagina opgehaald: ${target.wordCount.toLocaleString('nl-NL')} woorden`);
+    // Elke volgende stap kost Ahrefs-units: bij een afgehaakte gebruiker hier stoppen.
+    progress.throwIfGone();
 
     // --- 2. De lijst: export, of Search Console plus Ahrefs met fallback ------------------
+    progress.step('bronnen', 'active', mode === 'upload'
+      ? 'Je Search Console-export inlezen'
+      : `Search Console en Ahrefs raadplegen (${region.label})`);
     const list = await collectKeywordRows({
-      mode, pageUrl: target.url, uploadText: body.gsc, env: process.env, ahrefsKey,
+      mode, pageUrl: target.url, uploadText: body.gsc, env: process.env, ahrefsKey, region,
     });
     const { rows } = list;
+    progress.step('bronnen', 'done', `${rows.length.toLocaleString('nl-NL')} zoekwoorden gevonden`, {
+      source: list.source, gsc_error: list.gsc_error, gsc: list.gsc,
+    });
 
     // --- 3. Alleen rijen zonder volume verrijken: de rest heeft het al van Ahrefs --------
     const unenriched = rows.filter((row) => row.volume === null || row.volume === undefined).slice(0, MAX_ENRICHED_ROWS);
-    const metrics = ahrefsKey && unenriched.length
-      ? await fetchKeywordOverview(unenriched.map((row) => row.query), { apiKey: ahrefsKey, detail: 'basic' })
-          .catch((error) => {
-            console.warn('Verrijking met Ahrefs mislukt:', error.message);
-            return new Map();
-          })
-      : new Map();
+    let metrics = new Map();
+    if (ahrefsKey && unenriched.length) {
+      progress.throwIfGone();
+      progress.step('verrijken', 'active', `Zoekvolumes aanvullen bij Ahrefs (${region.label})`);
+      metrics = await fetchKeywordOverview(unenriched.map((row) => row.query), { apiKey: ahrefsKey, detail: 'basic', country: region.ahrefsCountry })
+        .catch((error) => {
+          console.warn('Verrijking met Ahrefs mislukt:', error.message);
+          return new Map();
+        });
+      progress.step('verrijken', 'done', `${metrics.size} zoekvolumes aangevuld`);
+    }
 
     // --- 4. Claude kiest -------------------------------------------------------------------
+    progress.throwIfGone();
+    progress.step('kiezen', 'active', 'Claude zoekt een zoekwoord dat bij de pagina past');
     const client = createClient();
     const answer = await askClaude(client, {
       system: REFOCUS_SYSTEM_PROMPT,
       schema: REFOCUS_SCHEMA,
-      message: buildRefocusMessage({ target, rejectedKeyword, intent, rows: rows.slice(0, MAX_ROWS_FOR_MODEL), metrics, source: list.source, gsc: list.gsc }),
+      message: buildRefocusMessage({
+        target, rejectedKeyword, intent, rows: rows.slice(0, MAX_ROWS_FOR_MODEL), metrics, source: list.source, gsc: list.gsc, region,
+      }),
       maxTokens: 4_000,
       effort: 'medium',
     });
     const verified = verifyRefocus(answer.data, rows);
+    progress.step('kiezen', 'done', verified.pick
+      ? `Gevonden in de lijst: "${verified.pick.keyword}"`
+      : 'Niets passends in de lijst: Claude stelt zelf zoekwoorden voor');
 
     // --- 5. Controleren en, bij voorstellen, het volume opzoeken ------------------------------
     let proposals = verified.proposals.map((item) => ({ ...item, volume: null, difficulty: null, intents: null, parentTopic: null, verified: false }));
     if (!verified.pick && proposals.length && ahrefsKey) {
-      const lookup = await fetchKeywordOverview(proposals.map((item) => item.keyword), { apiKey: ahrefsKey, detail: 'basic' })
+      progress.throwIfGone();
+      progress.step('controle', 'active', `Zoekvolume van de voorstellen checken bij Ahrefs (${region.label})`);
+      const lookup = await fetchKeywordOverview(proposals.map((item) => item.keyword), { apiKey: ahrefsKey, detail: 'basic', country: region.ahrefsCountry })
         .catch((error) => {
           console.warn('Volume van voorstellen niet opgehaald:', error.message);
           return new Map();
@@ -155,6 +184,7 @@ export default async function handler(req, res) {
           verified: (found?.volume ?? 0) >= MIN_PROPOSAL_VOLUME,
         };
       });
+      progress.step('controle', 'done', `${proposals.filter((item) => item.verified).length} van ${proposals.length} voorstellen hebben zoekvolume`);
     }
 
     let choice = null;
@@ -167,6 +197,7 @@ export default async function handler(req, res) {
 
     log('Herfocus afgerond', startedAt, {
       bron: list.source,
+      regio: region.id,
       gsc: list.gsc?.status ?? 'upload',
       rijen: rows.length,
       keuze: choice?.keyword || null,
@@ -176,12 +207,13 @@ export default async function handler(req, res) {
       output_tokens: answer.usage?.output_tokens,
     });
 
-    res.status(200).json({
+    progress.send(200, {
       // source: wat er in de lijst zit ('hybrid_gsc_ahrefs', 'ahrefs_only', 'gsc_only', 'gsc_upload');
       // gsc_error: Search Console werd geprobeerd en mislukte. Details in gsc.status en gsc.message.
       source: list.source,
       gsc_error: list.gsc_error,
       gsc: list.gsc,
+      region: region.id,
       round,
       rejectedKeyword,
       rowCount: rows.length,
@@ -197,12 +229,16 @@ export default async function handler(req, res) {
       note: list.note,
     });
   } catch (error) {
+    if (error.code === 'client_gone') {
+      console.log('Herfocus afgebroken: de gebruiker startte iets anders.');
+      return;
+    }
     if (error.code && error.status) {
-      res.status(error.status).json({ error: error.message, code: error.code });
+      progress.send(error.status, { error: error.message, code: error.code });
       return;
     }
     console.error('Herfocus mislukt:', error);
-    res.status(502).json({ error: describeClaudeError(error), code: 'refocus_failed' });
+    progress.send(502, { error: describeClaudeError(error), code: 'refocus_failed' });
   }
 }
 
