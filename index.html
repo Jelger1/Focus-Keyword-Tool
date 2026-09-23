@@ -6,9 +6,9 @@
   <title>Keyword Focus &amp; Intent Check &middot; Pure Minds</title>
   <link rel="icon" type="image/png" href="favicon.png" />
   <meta name="theme-color" content="#1ab9e2" />
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Open+Sans:ital,wght@0,400;0,600;0,700;0,800;1,400&display=swap" rel="stylesheet" />
+  <!-- Open Sans staat lokaal in fonts/ (zie styles.css): zo komt het in een pdf als gewone TrueType terecht. -->
+  <link rel="preload" href="fonts/open-sans-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin />
+  <link rel="preload" href="fonts/open-sans-latin-700-normal.woff2" as="font" type="font/woff2" crossorigin />
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
     // Huisstijl van pureminds.nl: Open Sans, cyaan, magenta voor de hoofdactie, groen voor "klaar".
@@ -20,7 +20,7 @@
           colors: {
             pm: {
               cyan: '#1ab9e2', tint: '#e8f7fc', blue: '#1b71a8', magenta: '#b61b50',
-              green: '#009670', ink: '#303030', muted: '#5c6670', line: '#e1e7ec', canvas: '#edf3f7',
+              green: '#009670', orange: '#e0951f', ink: '#303030', muted: '#5c6670', line: '#e1e7ec', canvas: '#edf3f7',
             },
           },
         },
@@ -28,6 +28,8 @@
     };
   </script>
   <link rel="stylesheet" href="styles.css" />
+  <!-- Het rapport als pdf: alleen bij afdrukken (download als pdf of Ctrl+P). -->
+  <link rel="stylesheet" href="print.css" media="print" />
 </head>
 <body class="text-pm-ink antialiased font-sans lg:h-screen lg:flex lg:flex-col lg:overflow-hidden">
   <div class="bg-deco" aria-hidden="true"></div>
@@ -182,7 +184,7 @@
                 <option value="nl">NL · Nederlands</option>
                 <option value="us">US · Engels</option>
               </select>
-              <button type="submit" id="recheck-btn" class="btn btn-primary btn-sm">check opnieuw</button>
+              <button type="submit" id="recheck-btn" class="btn btn-outline btn-sm">check opnieuw</button>
             </div>
             <p id="recheck-error" class="recheck-error" role="alert"></p>
             <p id="recheck-hint" class="recheck-hint"></p>
@@ -195,6 +197,7 @@
           en zet hem terug na "alles wissen".
         -->
         <div id="result-scroll" class="scroll-column bg-pm-canvas p-3 sm:p-5 lg:flex-1 lg:min-h-0 lg:overflow-y-auto">
+          <p class="print-only print-empty">Er staat nog geen rapport in beeld. Maak eerst een analyse, en kies dan ‘download als pdf’.</p>
           <div id="result-output">
             <div class="mx-auto max-w-2xl px-1 py-6 sm:py-10">
               <span class="pill pill-info">nog geen analyse</span>
@@ -220,7 +223,7 @@
                   <span><span class="block text-sm font-bold">Content gap</span><span class="block text-xs leading-5 text-pm-muted">Ontbrekende koppen, termen en vragen, met bron.</span></span>
                 </li>
               </ol>
-              <p class="mt-6 text-xs text-pm-muted">Elke suggestie krijgt een kopieerknop; het hele rapport kopieer je als markdown in de opbouw van onze focus keyword-documenten.</p>
+              <p class="mt-6 text-xs text-pm-muted">Elke suggestie krijgt een kopieerknop; het hele rapport download je als pdf of kopieer je als markdown, in de opbouw van onze focus keyword-documenten.</p>
             </div>
           </div>
         </div>
@@ -269,6 +272,9 @@
     </div>
   </template>
 
+  <!-- report.js en pdf.js eerst: app.js tekent bij het laden meteen het vorige rapport. -->
+  <script src="report.js"></script>
+  <script src="pdf.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

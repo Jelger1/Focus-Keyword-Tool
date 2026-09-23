@@ -15,8 +15,12 @@ Functions als back-end. Geen build-stap.
 | Pad | Rol |
 |---|---|
 | `index.html` | De UI: formulier, stappenbalk, resultaatkaart, lege staat en het skeleton-template. |
-| `styles.css` | Designsysteem van pureminds.nl: kaarten, knoppen, velden, labels, skeletons, oordeel, dropzone. |
-| `app.js` | De flow in de browser: analyse, herfocus, automatische heranalyse, de kaarten en de markdown-export. |
+| `styles.css` | Designsysteem van pureminds.nl: kaarten, knoppen, velden, labels, skeletons, oordeel, dropzone en de rapportcomponenten. |
+| `print.css` | Het rapport als A4-pdf: merkkop, kop- en voetregel, paginanummers. |
+| `fonts/` | Open Sans lokaal (OFL), zodat de pdf gewone TrueType-tekst bevat. |
+| `report.js` | De kaarten van het rapport, met de bron bij elk cijfer. |
+| `pdf.js` | "Download als pdf": bestandsnaam, kantlijnteksten en uitklapblokken bij het afdrukken. |
+| `app.js` | De flow in de browser: analyse, herfocus, automatische heranalyse en de markdown-export. |
 | `api/analyze.js` | Verzamelen, intent check en (bij een match) de content gap. |
 | `api/refocus.js` | Een beter zoekwoord zoeken: Search Console plus Ahrefs, of een zelf ingeladen export. |
 | `lib/ahrefs.js` | Alle Ahrefs-calls: SERP-overzicht, zoekwoordcijfers, zoekwoordideeën, rankende zoekwoorden per URL. |
@@ -68,7 +72,16 @@ dan afgebroken, en de server stopt vóór de dure stappen).
 
 Het rapport volgt de opbouw van onze focus keyword-documenten: beoordeling, focus
 zoekwoord (behouden of nieuw), keyword mapping, optimalisatie, aanbevelingen met
-SERP-bewijs, niet doen, samenvatting. Kopieerbaar als markdown.
+SERP-bewijs, niet doen, samenvatting. Kopieerbaar als markdown en te downloaden als
+pdf.
+
+**Pdf voor de klant.** "Download als pdf" opent het afdrukvenster van de browser; kies
+daar "Opslaan als PDF". De pdf is hetzelfde rapport als op het scherm, als A4 met
+logo, kopregel, voetregel en paginanummers, en met selecteerbare tekst. Bestandsnaam:
+`Focus keyword-rapport - domein - zoekwoord - datum.pdf`. Paginanummers en de
+kopregel werken in Chrome en Edge; Firefox en Safari laten die weg (logo, zoekwoord
+en datum staan dan nog op pagina 1). Ziet iemand toch een datum of URL in de
+kantlijn, dan staat onder "Meer instellingen" de optie "Kop- en voetteksten" aan.
 
 Een analyse duurt één tot twee minuten en kost circa 25 cent aan Claude plus
 ongeveer 1.500 Ahrefs-units (herfocus: 500 tot 2.000 extra).

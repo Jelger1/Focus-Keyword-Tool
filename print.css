@@ -1,0 +1,115 @@
+/**
+ * Pure Minds — het rapport als pdf
+ *
+ * Wordt alleen bij afdrukken geladen (media="print"). Dezelfde kaarten als op het
+ * scherm, maar als document: A4, zonder de tool eromheen, met merkkop, kopregel,
+ * voetregel en paginanummers. Getest in Chrome 153 met "Opslaan als PDF":
+ *   - achtergrondkleuren printen ook met "Achtergrondafbeeldingen" uit
+ *     (print-color-adjust: exact);
+ *   - zodra er een eigen kantlijntekst is, laat Chrome zijn eigen datum, titel en
+ *     URL weg, ook met "Kop- en voetteksten" aan;
+ *   - var() werkt in de kantlijn, dus pdf.js vult daar zoekwoord en datum in.
+ * Firefox en Safari tonen geen eigen kantlijnteksten: daarom staan logo, zoekwoord,
+ * URL en datum ook in de kop van pagina 1 zelf.
+ *
+ * Het afdrukvlak is ~680px breed: Tailwinds sm: staat aan, md: en lg: staan uit. Wat
+ * moet printen hangt daarom nooit af van responsieve Tailwind-klassen, alleen van de
+ * container queries op #result-output (680px valt in trede L). De Play CDN laadt zijn
+ * klassen na dit bestand, vandaar hier en daar !important.
+ */
+
+@page {
+  size: A4;
+  margin: 16mm 15mm 18mm;
+  @top-right { content: var(--print-running, ""); font: 600 7.5pt/1.2 "Open Sans", Arial, sans-serif; color: #5c6670; }
+  /* De punt voor de datum zit in --print-date zelf: zonder rapport geen losse punt. */
+  @bottom-left { content: "Pure Minds \00B7  focus keyword-rapport" var(--print-date, ""); font: 400 7.5pt/1.2 "Open Sans", Arial, sans-serif; color: #5c6670; }
+  @bottom-right { content: "pagina " counter(page) " van " counter(pages); font: 400 7.5pt/1.2 "Open Sans", Arial, sans-serif; color: #5c6670; }
+}
+
+/* Pagina 1 heeft de merkkop in de pagina zelf. Een lege kopregel, geen "none": zonder
+   eigen kantlijnvak bovenaan zet Chrome daar zijn eigen datum en titel neer. */
+@page :first {
+  margin-top: 12mm;
+  @top-right { content: ""; }
+}
+
+/* Alle rem-maten schalen mee: lopende tekst ~9,5pt, labels ~7pt. */
+html { font-size: 13.5px; }
+html, body { height: auto !important; overflow: visible !important; background: #fff !important; }
+body { display: block !important; }
+
+/* Alleen het rapport: de tool eromheen, knoppen en formulieren blijven weg. */
+.bg-deco, .no-print, .screen-only, .tooltip, .popover, .progress-panel, #password-overlay { display: none !important; }
+main.app-main { display: block !important; max-width: none !important; margin: 0 !important; padding: 0 !important; }
+#result-card { display: block !important; height: auto !important; border: 0 !important; box-shadow: none !important; }
+#result-scroll { display: block !important; height: auto !important; overflow: visible !important; padding: 0 !important; background: #fff !important; }
+.table-wrap { overflow: visible !important; }
+
+/* Tinten, balken, tegels en bronvormen printen mee; kinderen erven dit. */
+.report { display: block !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+.report button, .report .rsec-actions, .report .dropzone, .report textarea, .report input, .report select { display: none !important; }
+
+/* Kaarten worden hoofdstukken: geen kader of schaduw, een cyaan lijn erboven. */
+.report .rsec { border: 0; box-shadow: none; border-top: 1.5pt solid var(--pm-cyan); --pad: 0; }
+.report .rsec.is-sub { border-top-width: .75pt; }
+.report .report-head { border-top: 0; padding: 0; gap: 4mm; }
+.report .rsec-head { padding: 3mm 0 0; }
+.report .rsec-body { padding: 3mm 0 0; }
+/* Geen gedwongen nieuwe pagina voor de bijlage: dan bleef na de samenvatting een
+   halve pagina leeg en liep de methode door naar een bijna lege laatste pagina. */
+.report .report-title { font-size: 22pt; }
+.report .data-table { font-size: 8.5pt; }
+.report .data-table tbody tr:hover > td { background: inherit; }
+thead { display: table-header-group; }
+
+/* Op papier mag het compacter dan op het scherm: minder lucht, nooit minder inhoud. */
+.report > * + * { margin-top: 6mm; }
+.report .rsec-body > * + *, .report .rsub > * + * { margin-top: 3.5mm; }
+.report .rsub + .rsub, .report .rsub.has-rule { padding-top: 3.5mm; }
+.report .data-table :is(th, td) { padding-top: 1.4mm; padding-bottom: 1.4mm; }
+.report .data-table tr.group-row th { padding-top: 2.5mm; padding-bottom: 1mm; }
+.report .rec { padding: 3mm 0; }
+.report .rec-rows { gap: 2mm; margin-top: 2.5mm; }
+.report .opt-row, .report .q-row, .report .avoid-list > li { padding-top: 2.5mm; padding-bottom: 2.5mm; }
+.report .facts > div { padding-top: 1.4mm; padding-bottom: 1.4mm; }
+/* De legenda staat al op pagina 1; in de bijlage van de pdf hoeft hij niet nog eens. */
+.report .rsec.is-appendix .prov-legend { display: none; }
+
+/* Wat op het scherm onder elkaar staat, mag op papier achter elkaar: dezelfde
+   inhoud in minder regels. */
+.map-table .map-origin { display: inline; }
+.map-table .map-why + .map-origin::before { content: " \00B7  "; }
+.map-table .w-vol { width: 6.5rem; }
+.map-table .w-imp { width: 8.5rem; }
+.term-table .cell-sub { display: inline; }
+.term-table .cell-sub::before { content: " \2014  "; }
+/* SERP-tabel: een bredere kolom voor het topzoekwoord, zodat elke rij twee regels
+   hoog blijft (net als titel plus domein). */
+.serp-table .w-top { width: 9.5rem; }
+
+/* Links blijven klikbaar in de pdf; geen URL erachter, de bijlage heeft ze. */
+a { text-decoration: none !important; }
+.report-url, .serp-title { color: var(--pm-blue) !important; }
+
+/* Uitklapblokken: pdf.js opent ze bij beforeprint; dit is de vangrail voor Ctrl+P. */
+details::details-content { content-visibility: visible; display: contents; }
+.more { border-top: 0; }
+.more > summary { padding: 2mm 0 1mm; color: var(--pm-ink); cursor: default; }
+.more > summary::before { display: none; }
+
+/* Pagina-einden: koppen blijven bij hun inhoud, items en tabelrijen breken niet. */
+.rsec-head, .rsub-head, .rec-head, .eyebrow, h3, h4, h5, tr.group-row { break-after: avoid; }
+/* Een kop met zijn ondertitel en bron blijft heel, en een bronregel blijft bij zijn tabel. */
+.rsec-head, .rsub-head { break-inside: avoid; }
+.rsub > .note:has(+ .table-wrap) { break-inside: avoid; break-after: avoid; }
+.serp-legend { break-before: avoid; }
+
+/* Ctrl+P zonder rapport in beeld (tijdens een analyse, bij een fout of leeg): geen
+   half rapport onder de merknaam, maar een korte melding. pdf.js zet data-printable. */
+html:not([data-printable]) #result-output { display: none !important; }
+html[data-printable] .print-empty { display: none !important; }
+.print-empty { margin: 20mm 0; font-size: 11pt; color: #5c6670; }
+.report-head, .print-brand, .verdict-hero, .kpi, .compare-pane, .tb-row, .facts > div, .opt-row, .rec, .q-row,
+.avoid-list > li, .cand-list > li, .choice, .gap-summary, .summary-text, .verdict-direction, tr { break-inside: avoid; }
+p, li, dd { orphans: 3; widows: 3; }

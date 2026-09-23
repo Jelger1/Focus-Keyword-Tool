@@ -25,7 +25,33 @@
   --pm-canvas: #edf3f7;
   --pm-zebra: #f7fafc;
   --pm-track: #eef2f5;
+  --pm-orange: #e0951f;
+
+  /* Tekstkleuren en vlakken bij de statuskleuren: de volle kleur zelf haalt op wit
+     het contrast voor tekst niet, daarom een donkere inkt en een lichte tint. */
+  --pm-green-ink: #00704f;   --pm-green-tint: #e3f4ee;
+  --pm-orange-ink: #8f5600;  --pm-orange-tint: #fdf2de;
+  --pm-magenta-ink: #9e1744; --pm-magenta-tint: #fbe8ee;
+
+  /* Typografie van het rapport, in rem: print verkleint alles in één keer via de root. */
+  --fs-display: 1.75rem;  /* het zoekwoord in de rapportkop */
+  --fs-h2: 1.25rem;       /* hoofdstuktitel, oordeel */
+  --fs-h3: 1rem;          /* aanbeveling, subkop, naam van een plek */
+  --fs-kpi: 1.75rem;      /* kerncijfer */
+  --fs-lead: 1rem;        /* samenvatting */
+  --fs-body: .9375rem;    /* alle tekst van Claude */
+  --fs-small: .8125rem;   /* tabellen, bewijs, feiten */
+  --fs-caption: .75rem;   /* regels onder een cel of tegel, noten */
+  --fs-label: .6875rem;   /* hoofdletterlabels, bronnen */
 }
+
+/* Open Sans staat als losse bestanden in fonts/: het variabele font van Google
+   Fonts komt in een pdf terecht als Type3 (groter en minder scherp), deze statische
+   bestanden als gewone TrueType. Latin dekt ook ë, é, ï en €. */
+@font-face { font-family: 'Open Sans'; font-style: normal; font-weight: 400; font-display: swap; src: url(fonts/open-sans-latin-400-normal.woff2) format('woff2'); }
+@font-face { font-family: 'Open Sans'; font-style: normal; font-weight: 600; font-display: swap; src: url(fonts/open-sans-latin-600-normal.woff2) format('woff2'); }
+@font-face { font-family: 'Open Sans'; font-style: normal; font-weight: 700; font-display: swap; src: url(fonts/open-sans-latin-700-normal.woff2) format('woff2'); }
+@font-face { font-family: 'Open Sans'; font-style: normal; font-weight: 800; font-display: swap; src: url(fonts/open-sans-latin-800-normal.woff2) format('woff2'); }
 
 /* --- Achtergrond: zacht verloop en zeshoeklijnen, zoals de hero van pureminds.nl --- */
 
@@ -181,9 +207,9 @@ button:focus-visible,
   background: var(--pm-track); color: var(--pm-muted);
 }
 .pill strong { font-weight: 700; }
-.pill-good { background: #e3f4ee; color: #00704f; }
-.pill-mid { background: #fdf2de; color: #8f5600; }
-.pill-bad { background: #fbe8ee; color: #9e1744; }
+.pill-good { background: var(--pm-green-tint); color: var(--pm-green-ink); }
+.pill-mid { background: var(--pm-orange-tint); color: var(--pm-orange-ink); }
+.pill-bad { background: var(--pm-magenta-tint); color: var(--pm-magenta-ink); }
 .pill-info { background: var(--pm-tint); color: var(--pm-blue); }
 
 /* --- Scoretegels: getal, korte omschrijving en een balk --- */
@@ -235,7 +261,7 @@ button:focus-visible,
 
 .notice { border-left: 4px solid var(--pm-cyan); background: #fff; padding: .75rem 1rem; font-size: .875rem; line-height: 1.6; }
 .notice-error { border-left-color: var(--pm-magenta); color: #9e1744; }
-.notice-warn { border-left-color: #e0951f; color: #8f5600; }
+.notice-warn { border-left-color: var(--pm-orange); color: var(--pm-orange-ink); }
 .notice-title { font-weight: 700; }
 
 /* --- Skeletons tijdens het laden --- */
@@ -252,15 +278,6 @@ button:focus-visible,
 @media (prefers-reduced-motion: reduce) {
   .shimmer, .animate-spin, .progress-track[data-indeterminate] span, .tooltip { animation: none; }
   .progress-track[data-indeterminate] span { width: 100%; }
-}
-
-/* --- Afdrukken: alleen de resultaten, zonder chrome --- */
-
-@media print {
-  html, body { height: auto !important; overflow: visible !important; }
-  body { background: #fff; }
-  .bg-deco, .no-print { display: none !important; }
-  .card { border: 0; box-shadow: none; }
 }
 
 /* --- Stappen van de flow, onder de kaartkop --- */
@@ -402,3 +419,428 @@ fieldset.field { border: 0; margin: 0; padding: 0; min-width: 0; }
 /* Foutregel bij de zoekwoordbalk: ook op een korte laptop zichtbaar (de hint niet). */
 .recheck-error { margin-top: .3rem; font-size: .75rem; font-weight: 600; color: #9e1744; }
 .recheck-error:empty { display: none; }
+
+/* =====================================================================================
+ * Het rapport: een dashboard van kaarten, genummerd in de volgorde van onze focus
+ * keyword-documenten. Dezelfde DOM is de pdf (print.css).
+ *
+ * De componenten reageren op de breedte van de resultaatkolom, niet van het scherm:
+ * die kolom is op een 1024-laptop smaller dan een telefoon in de breedte, en een A4
+ * is net zo breed als de kolom op 1440. Drie treden, in px (niet in rem: print
+ * verkleint de root):
+ *   S  < 480    telefoon (kolom ~330)
+ *   M  480-599  laptop 1024 (~520)
+ *   L  >= 600   desktop 1440 (~650-670) en A4 (680)
+ * Zonder container queries valt alles terug op S, en die werkt ook.
+ *
+ * Geen Tailwind-afstanden, `hidden` of responsieve klassen op deze componenten: de
+ * Play CDN laadt zijn klassen na dit bestand en in print is het scherm ~680px breed.
+ * ===================================================================================== */
+
+/* Op het id: renderReport, showEmpty en renderError overschrijven className. */
+#result-output { container: report / inline-size; }
+.report { display: grid; gap: 1rem; }
+.report > * { min-width: 0; }
+@media screen { .print-only { display: none !important; } }
+@media print { .screen-only { display: none !important; } }
+
+/* Kolommen per breedte: .cq-m en .cq-l alleen op th en td; .cq-until-m, .cq-until-l
+   en .cq-from-m zijn terugvalregels in een cel. */
+.cq-m, .cq-l { display: none; }
+.cq-from-m { display: none; }
+@container report (min-width: 480px) {
+  .cq-m { display: table-cell; }
+  .cq-from-m { display: inline; }
+  .cq-until-m { display: none !important; }
+}
+@container report (min-width: 600px) {
+  .cq-l { display: table-cell; }
+  .cq-until-l { display: none !important; }
+}
+
+.eyebrow { font-size: var(--fs-label); font-weight: 700; line-height: 1.3; letter-spacing: .08em; text-transform: uppercase; color: var(--pm-muted); }
+.note { font-size: var(--fs-caption); line-height: 1.5; color: var(--pm-muted); max-width: 72ch; }
+.prose { font-size: var(--fs-body); line-height: 1.6; max-width: 68ch; overflow-wrap: anywhere; }
+
+/* --- Hoofdstukkaart --- */
+
+.rsec {
+  --pad: 1rem;
+  background: #fff; border: 1px solid var(--pm-line);
+  box-shadow: 0 1px 2px rgba(16, 40, 60, .05), 0 12px 28px -24px rgba(16, 40, 60, .3);
+  scroll-margin-top: 1rem;
+}
+.rsec:focus { outline: none; }
+@container report (min-width: 480px) { .rsec { --pad: 1.25rem; } }
+@container report (min-width: 600px) { .rsec { --pad: 1.5rem; } }
+.rsec-head { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; gap: .25rem .75rem; padding: var(--pad) var(--pad) 0; }
+.rsec-num {
+  width: 1.6rem; height: 1.85rem; margin-top: .05rem; display: grid; place-items: center;
+  font-size: .75rem; font-weight: 800; font-variant-numeric: tabular-nums;
+  background: var(--pm-cyan); color: var(--pm-ink);
+}
+.rsec.is-sub .rsec-num { background: var(--pm-tint); color: var(--pm-blue); font-size: .6875rem; }
+.rsec.is-appendix .rsec-num { background: var(--pm-track); color: var(--pm-muted); }
+.rsec-titles { min-width: 0; }
+.rsec-title { font-size: var(--fs-h2); line-height: 1.3; font-weight: 700; letter-spacing: -.01em; overflow-wrap: anywhere; }
+.rsec-tag { font-size: var(--fs-body); font-weight: 600; letter-spacing: 0; color: var(--pm-muted); }
+.rsec-sub { margin-top: .25rem; font-size: var(--fs-small); line-height: 1.5; color: var(--pm-muted); max-width: 68ch; }
+.rsec-titles > .prov { margin-top: .4rem; }
+.rsec-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .375rem; }
+@container report (max-width: 479px) { .rsec-actions { grid-column: 2; justify-content: flex-start; } }
+.rsec-body { padding: 1rem var(--pad) var(--pad); }
+/* Marges, geen grid-gap: dan breekt een pagina voorspelbaar en begint hij niet met lege ruimte. */
+.rsec-body > * + *, .rsub > * + *, .more-body > * + * { margin-top: 1.25rem; }
+.rsec.is-compact .rsec-body > * + * { margin-top: .75rem; }
+.rsub + .rsub, .rsub.has-rule { border-top: 1px solid var(--pm-line); padding-top: 1.25rem; }
+.rsub-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: .25rem 1rem; }
+.rsub > .rsub-head + * { margin-top: .75rem; }
+.rsub-title { font-size: var(--fs-h3); line-height: 1.35; font-weight: 700; }
+.subnum { margin-right: .5rem; color: var(--pm-blue); font-variant-numeric: tabular-nums; }
+
+/* --- Rapportkop: het antwoord eerst --- */
+
+.report-head { display: grid; gap: 1rem; padding: var(--pad); border-top: 3px solid var(--pm-cyan); }
+.report-head > * { min-width: 0; }
+.report-id { display: grid; gap: .25rem; justify-items: start; }
+.report-title { font-size: 1.5rem; line-height: 1.15; font-weight: 800; letter-spacing: -.02em; overflow-wrap: anywhere; }
+@container report (min-width: 480px) { .report-title { font-size: var(--fs-display); } }
+.report-url { font-size: var(--fs-small); font-weight: 600; color: var(--pm-blue); overflow-wrap: anywhere; }
+.report-url:hover { text-decoration: underline; text-underline-offset: 3px; }
+.report-meta { display: flex; flex-wrap: wrap; gap: .35rem 1.25rem; font-size: var(--fs-caption); line-height: 1.5; }
+.report-meta > div { display: flex; flex-wrap: wrap; gap: .35rem; min-width: 0; }
+.report-meta dt { font-weight: 700; }
+.report-meta dd { color: var(--pm-muted); overflow-wrap: anywhere; }
+.print-brand { display: flex; align-items: flex-end; justify-content: space-between; gap: 1rem; padding-bottom: 3mm; border-bottom: 1.5pt solid var(--pm-cyan); }
+.print-logo { height: 12mm; width: auto; }
+.print-doc { display: grid; text-align: right; font-size: 8pt; line-height: 1.4; color: var(--pm-muted); }
+.print-doc strong { font-size: 10.5pt; color: var(--pm-ink); }
+
+/* Oordeel: bouwt voort op .verdict, dat zelf ongewijzigd blijft */
+.verdict-hero { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: .4rem .9rem; align-items: start; padding: 1rem 1.15rem; }
+.verdict-hero > :not(.verdict-mark) { grid-column: 2; min-width: 0; }
+.verdict-mark {
+  grid-row: 1 / span 2; width: 2rem; height: 2.3rem; display: grid; place-items: center;
+  background: var(--pm-green); color: #fff;
+}
+.verdict-no .verdict-mark { background: var(--pm-magenta); }
+.verdict-mark svg { width: 1rem; height: 1rem; }
+.verdict-title { font-size: var(--fs-h2); line-height: 1.3; font-weight: 700; }
+.verdict-meta { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem .75rem; font-size: var(--fs-small); }
+.verdict-text { font-size: var(--fs-body); line-height: 1.6; max-width: 68ch; overflow-wrap: anywhere; }
+.verdict-direction { padding: .6rem .75rem; background: #fff; border-left: 3px solid var(--pm-cyan); font-size: var(--fs-small); line-height: 1.6; overflow-wrap: anywhere; }
+.verdict-note { font-size: var(--fs-caption); line-height: 1.5; color: var(--pm-muted); }
+.certainty { display: inline-flex; align-items: center; gap: .45rem; font-weight: 600; }
+.certainty-bar { display: inline-grid; grid-template-columns: repeat(3, .8rem); gap: 2px; }
+.certainty-bar i { height: .4rem; background: rgba(48, 48, 48, .15); }
+.certainty[data-level="laag"] i:first-child,
+.certainty[data-level="middel"] i:nth-child(-n+2),
+.certainty[data-level="hoog"] i { background: var(--pm-ink); }
+
+/* Kerncijfers: één bron per tegel, een ontbrekend cijfer is nooit 0 */
+.kpi-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .5rem; }
+.kpi-grid > .kpi:last-child:nth-child(odd) { grid-column: 1 / -1; }
+@container report (min-width: 480px) {
+  .kpi-grid[data-count="3"] { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .kpi-grid[data-count="3"] > .kpi:last-child { grid-column: auto; }
+}
+@container report (min-width: 600px) { .kpi-grid[data-count="4"] { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+.kpi {
+  display: flex; flex-direction: column; gap: .25rem; min-width: 0; padding: .75rem .875rem; background: #fff;
+  border: 1px solid var(--pm-line); border-top: 3px solid var(--kpi-tone, var(--pm-cyan));
+}
+.kpi[data-tone="good"] { --kpi-tone: var(--pm-green); }
+.kpi[data-tone="mid"] { --kpi-tone: var(--pm-orange); }
+.kpi[data-tone="bad"] { --kpi-tone: var(--pm-magenta); }
+.kpi.is-empty { --kpi-tone: var(--pm-line); }
+.kpi-label { font-size: var(--fs-caption); font-weight: 600; line-height: 1.3; color: var(--pm-muted); }
+.kpi-value { font-size: 1.5rem; line-height: 1.1; font-weight: 700; letter-spacing: -.02em; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+@container report (min-width: 480px) { .kpi-value { font-size: var(--fs-kpi); } }
+/* De eenheid breekt als geheel naar de volgende regel, nooit midden in het woord. */
+.kpi-value small { display: inline-block; margin-left: .2rem; font-size: var(--fs-small); font-weight: 600; letter-spacing: 0; white-space: nowrap; color: var(--pm-muted); }
+.kpi-value.is-text { font-size: var(--fs-body); line-height: 1.35; letter-spacing: 0; }
+.kpi.is-empty .kpi-value { color: var(--pm-muted); }
+.kpi-bar { height: 4px; margin-top: .25rem; background: var(--pm-track); }
+.kpi-bar > span { display: block; height: 100%; background: var(--kpi-tone); }
+.kpi-note { font-size: var(--fs-caption); line-height: 1.45; color: var(--pm-muted); overflow-wrap: anywhere; }
+.kpi > .prov { margin-top: auto; padding-top: .35rem; }
+
+/* --- Bron van een cijfer of bewering: vorm én tekst, zodat het ook zwart-wit werkt --- */
+
+.prov {
+  display: inline-flex; align-items: center; gap: .3rem; max-width: 100%;
+  font-size: var(--fs-label); font-weight: 600; line-height: 1.3; letter-spacing: 0; text-transform: none; color: var(--pm-muted);
+}
+.prov::before { content: ''; flex: none; box-sizing: border-box; width: .5rem; height: .5rem; background: #aab5be; }
+.prov[data-kind="meting"]::before { background: var(--pm-green); border-radius: 50%; }
+.prov[data-kind="schatting"]::before { background: transparent; border: 2px solid var(--pm-orange); border-radius: 50%; }
+.prov[data-kind="serp"]::before { background: var(--pm-cyan); }
+.prov[data-kind="claude"]::before { background: var(--pm-blue); transform: rotate(45deg) scale(.8); }
+.prov-legend { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem 1rem; padding-top: .75rem; border-top: 1px solid var(--pm-line); }
+
+/* --- Status: icoon plus tekst, nooit alleen kleur --- */
+
+.status { display: inline-flex; align-items: flex-start; gap: .3rem; font-size: var(--fs-caption); font-weight: 700; line-height: 1.3; }
+.status svg { flex: none; width: .8rem; height: .8rem; margin-top: .05rem; }
+.status[data-tone="good"] { color: var(--pm-green-ink); }
+.status[data-tone="mid"] { color: var(--pm-orange-ink); }
+.status[data-tone="bad"] { color: var(--pm-magenta-ink); }
+.status[data-tone="muted"] { color: var(--pm-muted); }
+.status[data-tone="info"] { color: var(--pm-blue); }
+
+/* --- Posities in Google; de eigen pagina valt overal op --- */
+
+.pos {
+  display: inline-block; min-width: 1.85rem; padding: 0 .3rem;
+  font-size: var(--fs-caption); font-weight: 700; line-height: 1.35rem; text-align: center;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+  background: var(--pm-tint); color: var(--pm-blue);
+}
+.pos.is-own { background: var(--pm-cyan); color: var(--pm-ink); }
+.pos-list { display: inline-flex; flex-wrap: wrap; gap: .25rem; vertical-align: middle; }
+
+/* --- Sleutel-waardelijst met dunne lijnen --- */
+
+.facts { border-top: 1px solid var(--pm-line); }
+.facts > div { display: grid; gap: .15rem; padding: .5rem 0; border-bottom: 1px solid var(--pm-line); font-size: var(--fs-small); line-height: 1.5; }
+@container report (min-width: 480px) { .facts > div { grid-template-columns: 11rem minmax(0, 1fr); gap: 1rem; } }
+.facts dt { font-weight: 600; color: var(--pm-muted); }
+.facts dd { min-width: 0; overflow-wrap: anywhere; }
+.facts dd .prov { margin-left: .5rem; vertical-align: .05em; }
+.facts dd .cell-sub { margin-top: .15rem; }
+
+/* --- 1 Beoordeling --- */
+
+.compare { display: grid; gap: .75rem; }
+@container report (min-width: 480px) { .compare { grid-template-columns: 1fr 1fr; } }
+.compare-pane { display: grid; align-content: start; justify-items: start; gap: .5rem; min-width: 0; padding: .9rem 1rem; background: var(--pm-soft); }
+.compare-type { font-size: var(--fs-h3); line-height: 1.35; font-weight: 700; overflow-wrap: anywhere; }
+.compare-text { font-size: var(--fs-small); line-height: 1.6; }
+.compare-foot { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem; font-size: var(--fs-caption); color: var(--pm-muted); }
+
+.arg-list { display: grid; gap: .6rem; }
+.arg { position: relative; padding-left: 1.1rem; font-size: var(--fs-body); line-height: 1.6; overflow-wrap: anywhere; }
+.arg::before { content: ''; position: absolute; left: 0; top: .62em; width: .4rem; height: .4rem; background: var(--pm-cyan); }
+.arg .pos-list { margin-left: .35rem; }
+
+.typebars { display: grid; gap: .6rem; }
+.tb-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "label count" "bar bar"; gap: .25rem .75rem; font-size: var(--fs-small); }
+@container report (min-width: 480px) { .tb-row { grid-template-columns: 10rem minmax(0, 1fr) auto; grid-template-areas: "label bar count"; align-items: center; } }
+.tb-label { grid-area: label; font-weight: 600; overflow-wrap: anywhere; }
+.tb-label small { font-size: var(--fs-caption); font-weight: 400; color: var(--pm-muted); }
+.tb-bar { grid-area: bar; height: .5rem; background: var(--pm-track); }
+.tb-bar > span { display: block; height: 100%; background: var(--pm-cyan); }
+.tb-count { grid-area: count; font-size: var(--fs-caption); color: var(--pm-muted); font-variant-numeric: tabular-nums; text-align: right; }
+.caption-line { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .25rem .75rem; }
+
+/* --- Tabellen: uitbreidingen op .data-table --- */
+
+.data-table.is-fixed { table-layout: fixed; }
+.data-table.no-zebra tbody tr:nth-child(even) td { background: none; }
+.map-origin { display: block; }
+/* Een lege groep: een gewone tabelcel (geen .cell-sub, die maakt er een blok van). */
+.data-table td.cell-empty { font-size: var(--fs-caption); color: var(--pm-muted); }
+.data-table th .th-sub { display: flex; margin-top: .1rem; font-size: var(--fs-label); font-weight: 600; line-height: 1.3; white-space: normal; color: var(--pm-muted); }
+.data-table th.num .th-sub { justify-content: flex-end; }
+.data-table th .th-sub .prov { align-items: flex-start; }
+.data-table th .th-sub .prov::before { margin-top: .2em; }
+.data-table .num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.data-table .cell-main { font-weight: 600; overflow-wrap: anywhere; }
+.data-table td { overflow-wrap: anywhere; }
+.cell-sub { display: block; margin-top: .15rem; font-size: var(--fs-caption); line-height: 1.45; font-weight: 400; color: var(--pm-muted); overflow-wrap: anywhere; }
+.data-table tr.group-row th {
+  padding: .9rem .75rem .35rem; background: #fff; border-bottom: 1px solid var(--pm-line);
+  font-size: var(--fs-label); font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--pm-muted);
+}
+.group-row-inner { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
+.group-row-inner .btn { letter-spacing: 0; text-transform: none; }
+.group-count { margin-left: .35rem; letter-spacing: 0; }
+.data-table tr.is-own > td, .data-table tr.is-primary > td { background: var(--pm-tint) !important; }
+.data-table tr.is-own > td:first-child, .data-table tr.is-primary > td:first-child { box-shadow: inset 3px 0 0 var(--pm-cyan); }
+.usage { display: inline-flex; align-items: center; gap: .45rem; }
+.usage-bar { width: 3rem; height: .375rem; background: var(--pm-track); }
+.usage-bar > span { display: block; height: 100%; background: var(--pm-cyan); }
+@container report (max-width: 479px) {
+  #result-output .data-table :is(th, td) { padding: .5rem; }
+  .data-table .usage-bar { display: none; }
+}
+/* Kolombreedtes bij table-layout: fixed; een cel zonder breedte krijgt de rest.
+   Een kolom die per breedte wegvalt (.cq-m, .cq-l) krijgt zijn breedte pas waar hij
+   zichtbaar is: Chrome telt de breedte van een verborgen kolom anders gewoon mee, en
+   dan houdt de paginakolom op een telefoon 0px over. */
+.w-pos { width: 2.4rem; }
+.w-icon { width: 1.9rem; }
+.w-vol:not(.cq-l) { width: 4.5rem; }
+.w-imp { width: 4.75rem; }
+.w-conc { width: 7.25rem; }
+.w-rank { width: 4.5rem; }
+@container report (min-width: 480px) {
+  .w-vol:not(.cq-l) { width: 6rem; }
+  .w-imp { width: 7rem; }
+  .w-imp.is-short { width: 5.5rem; }
+  .cq-m.w-src { width: 6rem; }
+  .cq-m.w-top { width: 8rem; }
+  .cq-m.w-words { width: 4.5rem; }
+}
+@container report (min-width: 600px) {
+  .cq-l.w-type { width: 8.5rem; }
+  .cq-l.w-words { width: 4.5rem; }
+  .cq-l.w-clicks { width: 4.5rem; }
+  .cq-l.w-vol { width: 4.75rem; }
+}
+/* Smallere celranden: zo past een paginatype als "productoverzicht" op één regel. */
+.serp-table :is(th, td) { padding-left: .5rem; padding-right: .5rem; }
+.serp-title { font-weight: 600; color: var(--pm-blue); overflow-wrap: anywhere; }
+.serp-title:hover { text-decoration: underline; }
+.serp-legend { display: flex; flex-wrap: wrap; gap: .35rem 1rem; }
+
+/* --- 4 Optimalisatie --- */
+
+.opt-row { display: grid; gap: .5rem 1.25rem; padding: .9rem 0; border-top: 1px solid var(--pm-line); }
+.opt-row:first-child { border-top: 0; padding-top: 0; }
+.opt-el { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .6rem; }
+@container report (min-width: 480px) {
+  .opt-row { grid-template-columns: 9.5rem minmax(0, 1fr); }
+  .opt-el { flex-direction: column; align-items: flex-start; }
+}
+.opt-name { font-size: var(--fs-h3); line-height: 1.35; font-weight: 700; }
+.opt-reason { font-size: var(--fs-caption); color: var(--pm-muted); }
+.opt-body { min-width: 0; }
+.opt-label { font-size: var(--fs-label); font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--pm-muted); }
+.opt-now { margin-top: .2rem; padding-left: .6rem; border-left: 2px solid #c9d4dc; font-size: var(--fs-small); line-height: 1.55; overflow-wrap: anywhere; }
+.opt-now.is-clamped { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
+.opt-new { margin-top: .75rem; padding: .65rem .85rem; background: var(--pm-soft); border-left: 3px solid var(--pm-cyan); }
+.opt-new-head { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem .75rem; }
+.opt-new-head .btn { margin-left: auto; }
+.opt-new-text { margin-top: .3rem; font-size: var(--fs-body); font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; }
+
+/* --- 5 Aanbevelingen --- */
+
+.gap-summary { display: grid; gap: .6rem; }
+.gapbar { display: flex; gap: 2px; height: 10px; }
+.gapbar > span { display: block; min-width: 4px; }
+.gb-good { background: var(--pm-green); }
+.gb-mid { background: var(--pm-orange); }
+.gb-bad { background: var(--pm-magenta); }
+.gb-legend { display: flex; flex-wrap: wrap; gap: .25rem 1rem; font-size: var(--fs-caption); }
+.gb-legend i { display: inline-block; width: .625rem; height: .625rem; margin-right: .35rem; vertical-align: -.05rem; }
+.mini-stats { display: grid; gap: .5rem 1.25rem; font-size: var(--fs-small); }
+@container report (min-width: 480px) { .mini-stats { grid-template-columns: 1fr 1fr; } }
+.mini-stats dt { font-size: var(--fs-label); font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--pm-muted); }
+.mini-stats dd { margin-top: .15rem; }
+.mini-stats strong { font-weight: 700; font-variant-numeric: tabular-nums; }
+
+/* Een aanbeveling in de vorm van het teamdocument: SERP-evidence, gap, aanbeveling */
+.rec { padding: 1.1rem 0; scroll-margin-top: 1rem; }
+.rec-list > .rec:first-child { padding-top: 0; }
+.rec-list > .rec + .rec, .rec-list > .eyebrow + .rec { border-top: 1px solid var(--pm-line); }
+.rec-list > .eyebrow { margin-top: .5rem; padding-top: 1.1rem; border-top: 1px solid var(--pm-line); }
+.rec-list > .eyebrow + .rec { border-top: 0; padding-top: .75rem; }
+.rec-head { display: grid; grid-template-columns: 1.75rem minmax(0, 1fr) auto; gap: .15rem .75rem; align-items: start; }
+.rec-num {
+  width: 1.75rem; height: 2rem; display: grid; place-items: center;
+  font-size: var(--fs-small); font-weight: 800; font-variant-numeric: tabular-nums;
+  background: var(--pm-tint); color: var(--pm-blue);
+}
+.rec.is-partial .rec-num { background: var(--pm-track); color: var(--pm-muted); }
+.rec-kicker { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .6rem; font-size: var(--fs-caption); color: var(--pm-muted); }
+.rec-title { margin-top: .15rem; font-size: var(--fs-h3); line-height: 1.35; font-weight: 700; overflow-wrap: anywhere; }
+.rec-rows { display: grid; gap: .75rem; margin-top: .85rem; }
+.rec-row { display: grid; gap: .2rem; }
+.rec-row > dt { font-size: var(--fs-label); font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--pm-muted); }
+.rec-row > dd { min-width: 0; font-size: var(--fs-body); line-height: 1.6; overflow-wrap: anywhere; }
+.rec-row > dd > * + * { margin-top: .3rem; }
+@container report (min-width: 480px) {
+  .rec-rows { margin-left: 2.5rem; }
+  .rec-row { grid-template-columns: 7.25rem minmax(0, 1fr); gap: 1rem; }
+  .rec-row > dt { padding-top: .3rem; }
+}
+.evidence { display: grid; gap: .25rem; font-size: var(--fs-small); line-height: 1.5; }
+.evidence li { display: grid; grid-template-columns: 2.25rem minmax(0, 1fr); gap: .4rem; align-items: baseline; }
+.ev-domain { margin-right: .35rem; color: var(--pm-muted); }
+.ev-heading { overflow-wrap: anywhere; }
+.h3-list { display: grid; gap: .25rem; font-size: var(--fs-small); }
+.h3-list li { display: flex; align-items: baseline; gap: .5rem; }
+
+/* Wat al goed staat: compact, groen, en dus ook in de pdf */
+.done-list { display: flex; flex-wrap: wrap; gap: .35rem; }
+.done-list li {
+  display: inline-flex; align-items: flex-start; gap: .3rem; max-width: 100%; padding: .15rem .5rem;
+  font-size: var(--fs-caption); line-height: 1.45; background: var(--pm-green-tint); color: var(--pm-green-ink); overflow-wrap: anywhere;
+}
+.done-list svg { flex: none; width: .75rem; height: .75rem; margin-top: .15rem; }
+
+/* Vragen */
+.q-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .75rem; padding: .85rem 0; border-top: 1px solid var(--pm-line); }
+.q-row:first-child { border-top: 0; padding-top: 0; }
+.q-meta { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem .75rem; font-size: var(--fs-caption); color: var(--pm-muted); }
+.q-text { margin-top: .3rem; font-size: var(--fs-body); font-weight: 700; line-height: 1.45; overflow-wrap: anywhere; }
+.q-angle { margin-top: .25rem; font-size: var(--fs-small); line-height: 1.55; overflow-wrap: anywhere; }
+.q-angle b { margin-right: .25rem; font-weight: 600; color: var(--pm-muted); }
+
+/* --- 6 Niet doen en 7 Samenvatting --- */
+
+.avoid-list > li { display: grid; grid-template-columns: 1.5rem minmax(0, 1fr); gap: .75rem; padding: .85rem 0; border-top: 1px solid var(--pm-line); }
+.avoid-list > li:first-child { border-top: 0; padding-top: 0; }
+.avoid-icon { width: 1.5rem; height: 1.5rem; display: grid; place-items: center; background: var(--pm-magenta-tint); color: var(--pm-magenta-ink); }
+.avoid-icon svg { width: .8rem; height: .8rem; }
+.avoid-text { font-size: var(--fs-body); line-height: 1.6; overflow-wrap: anywhere; }
+.avoid-src { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .5rem; margin-top: .3rem; font-size: var(--fs-caption); color: var(--pm-muted); }
+.summary-text { max-width: 68ch; padding-left: 1rem; border-left: 3px solid var(--pm-cyan); font-size: var(--fs-lead); line-height: 1.7; overflow-wrap: anywhere; }
+
+/* --- Herfocus: de keuze en de kandidaten --- */
+
+.choice { display: grid; gap: .45rem; }
+.choice > * { min-width: 0; }
+.cand-list > li { display: grid; gap: .5rem .75rem; padding: .8rem 0; border-top: 1px solid var(--pm-line); }
+.cand-list > li:first-child { border-top: 0; padding-top: .25rem; }
+@container report (min-width: 480px) { .cand-list > li { grid-template-columns: minmax(0, 1fr) auto; align-items: start; } }
+.cand-kw { font-size: var(--fs-body); font-weight: 700; overflow-wrap: anywhere; }
+.cand-facts { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem .75rem; margin-top: .2rem; font-size: var(--fs-caption); }
+.cand-why { margin-top: .3rem; font-size: var(--fs-small); line-height: 1.55; color: var(--pm-muted); }
+.source-line { font-size: var(--fs-caption); }
+.refocus-panels { display: grid; gap: .75rem; }
+@container report (min-width: 480px) { .refocus-panels { grid-template-columns: 1fr 1fr; } }
+.refocus-panel { display: grid; align-content: start; gap: .75rem; min-width: 0; padding: 1rem; border: 1px solid var(--pm-line); }
+.refocus-panel .rsub-head { margin-bottom: 0; }
+.refocus-panel > * { min-width: 0; }
+/* Lange knopteksten mogen hier afbreken: anders steken ze op een smalle telefoon uit het paneel. */
+.refocus-panel .btn { justify-self: start; white-space: normal; text-align: left; max-width: 100%; }
+
+/* --- Uitklapblok: de herfocus en de zoekwoordtabel --- */
+
+.more { border-top: 1px solid var(--pm-line); }
+.more > summary {
+  display: flex; align-items: center; gap: .55rem; padding: .7rem 0; cursor: pointer; list-style: none;
+  font-size: var(--fs-small); font-weight: 700; color: var(--pm-blue);
+}
+.more > summary::-webkit-details-marker { display: none; }
+.more > summary::before {
+  content: ''; flex: none; width: .45rem; height: .45rem;
+  border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; transform: rotate(-45deg); transition: transform .15s;
+}
+.more[open] > summary::before { transform: rotate(45deg); }
+.more > summary:hover { text-decoration: underline; text-underline-offset: 3px; }
+.more-body { padding-bottom: .75rem; }
+
+/* --- Knoppen, het einde van het rapport en de pdf-uitleg --- */
+
+.btn-icon { width: 1.75rem; height: 1.75rem; padding: 0; }
+@media (pointer: coarse) { .btn-icon { width: 2.25rem; height: 2.25rem; } }
+.report-end {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .75rem 1rem;
+  padding: 1rem var(--pad); background: var(--pm-soft);
+}
+.report-end-hint { margin-top: .15rem; font-size: var(--fs-small); color: var(--pm-muted); max-width: 44ch; }
+.report-end-actions { position: relative; display: flex; flex-wrap: wrap; gap: .5rem; }
+.pdf-help { top: calc(100% + .5rem); right: 0; }
+/* Op een smalle kolom staat de knop onderaan links: daar opent de uitleg naar rechts. */
+@container report (max-width: 479px) { .report-end .pdf-help { right: auto; left: 0; } }
+.pdf-help h3 { font-size: var(--fs-h3); font-weight: 700; line-height: 1.35; }
+.pdf-help ol { margin-top: .5rem; padding-left: 1.1rem; list-style: decimal; display: grid; gap: .3rem; font-size: var(--fs-small); line-height: 1.5; }
+.pdf-help .note { margin-top: .6rem; }
+.pdf-help-actions { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .85rem; }
+
+@media (prefers-reduced-motion: reduce) {
+  .more > summary::before { transition: none; }
+}

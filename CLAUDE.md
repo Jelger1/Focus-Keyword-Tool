@@ -27,7 +27,8 @@ intentie van de SERP?**
 | Geen match | De marketeer laadt een Search Console-export in (of kiest de Ahrefs-schatting). Claude kiest daaruit een passend zoekwoord (B1) of stelt er zelf een voor dat de code op zoekvolume checkt (B2). Met dat zoekwoord start automatisch een nieuwe analyse, maximaal twee rondes. |
 
 De output is een dashboard van kaarten, kopieerbaar per suggestie én in één keer
-als markdown, in de opbouw van onze focus keyword-documenten.
+als markdown, en te downloaden als pdf voor de klant, in de opbouw van onze focus
+keyword-documenten.
 
 ---
 
@@ -39,8 +40,12 @@ Functions.
 | Pad | Rol |
 |---|---|
 | `index.html` | De volledige UI: chrome, formulier, stappenbalk, resultaatkaart, `<template>` voor de ladende staat. |
-| `styles.css` | Het designsysteem: kaarten, knoppen, invoervelden, labels, scoretegels, stappen, oordeel, dropzone, skeletons. |
-| `app.js` | Frontend-flow: analyse, herfocus, automatische heranalyse, rendering, kopieerknoppen, markdown-export. |
+| `styles.css` | Het designsysteem: kaarten, knoppen, invoervelden, labels, stappen, oordeel, dropzone, skeletons, en de rapportcomponenten (kerncijfers, bronlabels, tabellen, aanbevelingen). |
+| `print.css` | Het rapport als A4-pdf (alleen bij afdrukken): merkkop, kop- en voetregel met paginanummers, pagina-einden, compactere opmaak. |
+| `fonts/` | Open Sans als statische woff2 (OFL). Het variabele font van Google Fonts komt in een pdf als Type3 terecht; deze als TrueType. |
+| `report.js` | Het rapport: alle kaarten in de opbouw van onze focus keyword-documenten, met de bron bij elk cijfer. |
+| `pdf.js` | Het moment van afdrukken: bestandsnaam, kantlijnteksten, uitklapblokken open, eenmalige uitleg bij "download als pdf". |
+| `app.js` | Frontend-flow: analyse, herfocus, automatische heranalyse, kopieerknoppen, markdown-export. Laadt als laatste. |
 | `api/analyze.js` | Verzamelen, intent check en bij een match de content gap. Dun: het echte werk zit in `lib/`. |
 | `api/refocus.js` | Scenario B: een beter zoekwoord zoeken. |
 | `lib/ahrefs.js` | Alle Ahrefs-calls. Velden, timeouts en foutmeldingen staan alleen hier. |
@@ -76,6 +81,17 @@ Regels:
   laatste regel van een stroom, na één regel per fase (`lib/progress.js`). Meld
   alleen echte fasen: geen geschatte percentages. Roep `progress.throwIfGone()`
   aan vóór elke dure stap.
+- **De pdf is het rapport zelf.** Geen html2pdf of jsPDF: `print.css` maakt van
+  dezelfde kaarten een A4-document, en de marketeer kiest "Opslaan als PDF". Zo blijft
+  de tekst selecteerbaar en staat meting naast schatting precies zoals op het scherm.
+  Wat moet printen hangt nooit af van responsieve Tailwind-klassen (het afdrukvlak is
+  ~680px breed): gebruik de container queries op `#result-output` (`.cq-m`, `.cq-l`,
+  `.cq-until-*`). Een nieuwe kaart krijgt een printregel (`break-inside`) en zet niets
+  essentieels alleen achter een klik.
+- **Elk cijfer draagt zijn bron.** Gebruik `prov(kind, tekst)` uit `report.js`:
+  `meting` (Search Console, gemeten koppen en woorden), `schatting` (Ahrefs), `serp`
+  (de Google-top 10 als momentopname) of `claude` (interpretatie). Een ontbrekend
+  cijfer is een streepje met de reden, nooit 0.
 - **Hulpcode hoort in `lib/`, niet in `api/`.** Vercel maakt van elk bestand in
   `api/` een eigen endpoint.
 - **De code meet, Claude interpreteert, de code controleert.** Dat geldt voor
