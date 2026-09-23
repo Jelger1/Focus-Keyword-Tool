@@ -10,3 +10,8 @@ node_modules/
 
 # Video en plan uit de /brag-sessie: geen onderdeel van de tool
 brag-output/
+
+# Google Service Account-sleutels: horen in .env.local en Vercel, nooit in git of een deploy
+api/*.json
+*service-account*.json
+pureminds-warehouse-*.json

@@ -18,7 +18,7 @@ Functions als back-end. Geen build-stap.
 | `styles.css` | Designsysteem van pureminds.nl: kaarten, knoppen, velden, labels, skeletons, oordeel, dropzone. |
 | `app.js` | De flow in de browser: analyse, herfocus, automatische heranalyse, de kaarten en de markdown-export. |
 | `api/analyze.js` | Verzamelen, intent check en (bij een match) de content gap. |
-| `api/refocus.js` | Een beter zoekwoord zoeken in een Search Console-export of de Ahrefs-schatting. |
+| `api/refocus.js` | Een beter zoekwoord zoeken: Search Console plus Ahrefs, of een zelf ingeladen export. |
 | `lib/ahrefs.js` | Alle Ahrefs-calls: SERP-overzicht, zoekwoordcijfers, zoekwoordideeën, rankende zoekwoorden per URL. |
 | `lib/serp.js` | Provider-schakelaar: Ahrefs (standaard) of Serper (terugval). |
 | `lib/page.js` | Pagina's ophalen en uitlezen, voor doelpagina én concurrenten identiek. |
@@ -27,7 +27,11 @@ Functions als back-end. Geen build-stap.
 | `lib/compare.js` | Termen tellen, vragen verzamelen, keyword mapping en elke bewering van Claude controleren. |
 | `lib/refocus.js` | De herfocus-instructie en de controle van de keuze. |
 | `lib/gsc.js` | Search Console-exports lezen (CSV, TSV, JSON, Nederlandse en Engelse koppen). |
+| `lib/searchconsole.js` | Search Console API via een service account. Gooit nooit: geeft altijd een status terug. |
+| `lib/hybrid.js` | Search Console en Ahrefs samenvoegen, en de vlaggen `source` en `gsc_error`. |
+| `lib/keywordsources.js` | De zoekwoordlijst voor de herfocus: export, of Search Console plus Ahrefs met terugval. |
 | `lib/claude.js` | De gedeelde Claude-aanroep. |
+| `lib/auth.js` | Het optionele wachtwoord, in constante tijd vergeleken. |
 | `lib/pagetype.js`, `lib/text.js`, `lib/ratelimit.js` | Paginatypes vertalen, tekstnormalisatie, rate limit. |
 | `test/run.js` | Snelle controles zonder framework: `npm test`. |
 
@@ -85,6 +89,60 @@ automatisch opnieuw uit.
 Ontbreekt een sleutel, dan zegt de tool dat in de foutmelding, met de naam van de
 variabele erbij. De sleutels blijven op de server; de browser krijgt alleen JSON.
 
+## Google Search Console koppelen
+
+Met een service account haalt de tool voor elke pagina de echte zoekopdrachten uit
+Search Console: vertoningen, klikken en positie van de laatste 90 dagen, plus het
+paginatotaal. Dat werkt alleen voor domeinen waar het service account gebruiker is.
+Voor alle andere domeinen valt de tool stilletjes terug op Ahrefs; de analyse loopt
+gewoon door.
+
+**Zet `APP_PASSWORD` als je Search Console koppelt.** Zonder wachtwoord kan iedereen
+met de link van de tool de zoekdata van klanten opvragen. Op een publieke Vercel-deploy
+(production of preview) staat Search Console daarom uit zolang `APP_PASSWORD` leeg is
+(`gsc.status` is dan `niet_beveiligd`). Lokaal werkt het zonder wachtwoord.
+
+1. **Google Cloud-project.** Open [console.cloud.google.com](https://console.cloud.google.com),
+   kies of maak een project en zet onder **APIs & Services → Library** de
+   **Google Search Console API** aan.
+2. **Service account.** Maak onder **IAM & Admin → Service Accounts** een account aan.
+   Rollen in Google Cloud zijn niet nodig.
+3. **Sleutel.** Kies bij het account **Keys → Add key → Create new key → JSON**.
+   Bewaar het bestand buiten deze map en zet het nooit in git. Staan `client_email`
+   en `private_key` eenmaal in `.env.local` en Vercel, verwijder het bestand dan of
+   bewaar het in een wachtwoordmanager.
+4. **Toegang per klant.** Voeg in Search Console bij elke klant-property het
+   e-mailadres van het service account toe onder **Instellingen → Gebruikers en rechten**,
+   met rechten **Beperkt**. Lezen is genoeg.
+5. **Omgevingsvariabelen.** Zet `client_email` in `GOOGLE_CLIENT_EMAIL` en
+   `private_key` in `GOOGLE_PRIVATE_KEY`:
+   - **In Vercel:** plak de sleutel zoals hij in het JSON-bestand staat tussen de
+     aanhalingstekens, dus met de letterlijke `\n`-tekens, of meerregelig. Geen
+     aanhalingstekens eromheen. Vink **Sensitive** aan, zodat de waarde na het
+     opslaan niet meer te lezen is.
+   - **In `.env.local`:** op één regel, tussen dubbele aanhalingstekens, met `\n`
+     op elke plek van een regeleinde:
+     ```
+     GOOGLE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBg...\n-----END PRIVATE KEY-----\n"
+     ```
+   De tool accepteert alle drie de vormen: letterlijke `\n`, echte regeleindes en
+   Windows-regeleindes.
+6. **Gelekt?** Is de sleutel ergens zichtbaar geweest (chat, screenshot, commit), maak
+   dan onder **IAM & Admin → Service Accounts → Keys** een nieuwe sleutel en verwijder
+   de oude. Zet de nieuwe waarde in `.env.local` en Vercel en doe een redeploy.
+
+Elk antwoord van de API vertelt wat er gebruikt is:
+
+| Veld | Waarde | Betekenis |
+|---|---|---|
+| `source` | `hybrid_gsc_ahrefs` | Search Console-data is meegenomen naast Ahrefs. |
+| `source` | `ahrefs_only` | Alleen Ahrefs: geen koppeling, geen toegang of geen vertoningen. |
+| `source` | `gsc_only` | Alleen Search Console: Ahrefs kende de URL niet. |
+| `source` | `gsc_upload` | De marketeer heeft zelf een export ingeladen. |
+| `source` | `serp_only` | Alleen de SERP van Serper: geen Ahrefs-sleutel en geen Search Console. |
+| `gsc_error` | `true` | Search Console werd geprobeerd en mislukte, bijvoorbeeld geen toegang. |
+| `gsc.status` | `ok`, `leeg`, `niet_ingesteld`, `niet_beveiligd`, `geen_toegang`, `sleutel_ongeldig`, `api_uit`, `limiet`, `timeout`, `fout` | De precieze reden, met een Nederlandse uitleg in `gsc.message`. |
+
 ## Omgevingsvariabelen
 
 Kopieer `.env.example` naar `.env.local` en zet dezelfde variabelen in Vercel
@@ -94,6 +152,8 @@ onder **Settings → Environment Variables**.
 |---|---|---|
 | `ANTHROPIC_API_KEY` | ja | Intent check, herfocus en content gap. |
 | `AHREFS_API_KEY` | ja | SERP, zoekvolumes, zoekwoordideeën, rankende zoekwoorden per URL. |
+| `GOOGLE_CLIENT_EMAIL` | nee | E-mailadres van het service account, voor Search Console. |
+| `GOOGLE_PRIVATE_KEY` | nee | Private key van het service account. Zie hieronder voor het formaat. |
 | `SERP_PROVIDER` | nee | `ahrefs` (standaard) of `serper`. |
 | `SERPER_API_KEY` | nee | Alleen bij `SERP_PROVIDER=serper`: de live top 10 zonder paginatypes. |
-| `APP_PASSWORD` | nee | Zet je die, dan vraagt de tool eenmalig om een wachtwoord. |
+| `APP_PASSWORD` | nee, wel voor Search Console | Zet je die, dan vraagt de tool eenmalig om een wachtwoord. Verplicht op Vercel zodra Search Console gekoppeld is. |

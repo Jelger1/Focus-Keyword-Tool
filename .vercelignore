@@ -1,3 +1,6 @@
 test
 brag-output
 .history
+api/*.json
+*service-account*.json
+pureminds-warehouse-*.json

@@ -4,11 +4,12 @@
  * Stap 3B: de pagina past niet bij het zoekwoord, dus zoeken we een beter
  * zoekwoord bij de pagina.
  *
- *   1. De lijst zoekwoorden waarop de pagina al vertoond wordt: een Search
- *      Console-export (meting) of, zonder export, de rankende zoekwoorden
- *      volgens Ahrefs (schatting).
- *   2. De doelpagina opnieuw ophalen; we vertrouwen geen paginatekst uit de browser.
- *   3. De bovenste rijen verrijken met volume, intenties en parent topic (Ahrefs).
+ *   1. De doelpagina opnieuw ophalen; we vertrouwen geen paginatekst uit de browser.
+ *   2. De lijst zoekwoorden waarop de pagina al vertoond wordt: een Search
+ *      Console-export die de marketeer inlaadt, of automatisch Search Console
+ *      via het service account plus Ahrefs, samengevoegd. Geen toegang tot
+ *      Search Console? Dan alleen Ahrefs (lib/keywordsources.js).
+ *   3. Rijen zonder zoekvolume verrijken met volume, intenties en parent topic (Ahrefs).
  *   4. Claude kiest een passend zoekwoord uit de lijst (B1) of stelt er zelf voor (B2).
  *   5. De code controleert: een keuze moet letterlijk in de lijst staan; een
  *      voorstel krijgt pas een plek als Ahrefs er zoekvolume voor kent.
@@ -17,17 +18,17 @@
  */
 
 import { fetchPage, fail } from '../lib/page.js';
-import { fetchKeywordOverview, fetchOrganicKeywords } from '../lib/ahrefs.js';
+import { fetchKeywordOverview } from '../lib/ahrefs.js';
 import { createClient, askClaude, describeClaudeError } from '../lib/claude.js';
-import { parseGscExport } from '../lib/gsc.js';
+import { collectKeywordRows, rowSource } from '../lib/keywordsources.js';
 import {
   REFOCUS_SYSTEM_PROMPT, REFOCUS_SCHEMA, buildRefocusMessage, verifyRefocus, MIN_PROPOSAL_VOLUME,
 } from '../lib/refocus.js';
 import { normalize } from '../lib/text.js';
 import { clientKey, withinRateLimit } from '../lib/ratelimit.js';
+import { passwordOk } from '../lib/auth.js';
 
 const MAX_KEYWORD_CHARS = 120;
-const MAX_GSC_CHARS = 1_000_000;
 const MAX_ROWS_FOR_MODEL = 100;
 const MAX_ENRICHED_ROWS = 30;
 const MAX_ROWS_IN_RESPONSE = 25;
@@ -50,12 +51,20 @@ function withMetrics(item, metrics) {
     keyword: item.keyword,
     why: item.why,
     fit: item.fit,
+    // Per zoekwoord: gemeten (Search Console) of geschat (Ahrefs). Bepaalt het label in de UI.
+    source: rowSource(item.row),
     volume: found?.volume ?? item.row?.volume ?? null,
     difficulty: found?.difficulty ?? item.row?.difficulty ?? null,
     intents: found?.intents ?? item.row?.intents ?? null,
     parentTopic: found?.parentTopic ?? null,
     row: item.row
-      ? { clicks: item.row.clicks ?? null, impressions: item.row.impressions ?? null, position: item.row.position ?? null, traffic: item.row.traffic ?? null }
+      ? {
+          clicks: item.row.clicks ?? null,
+          impressions: item.row.impressions ?? null,
+          position: item.row.position ?? null,
+          traffic: item.row.traffic ?? null,
+          origin: item.row.origin ?? null,
+        }
       : null,
   };
 }
@@ -69,8 +78,8 @@ export default async function handler(req, res) {
   res.setHeader('Cache-Control', 'no-store');
 
   try {
-    const requiredPassword = process.env.APP_PASSWORD;
-    if (requiredPassword && req.headers['x-app-password'] !== requiredPassword) {
+    // Wachtwoord is optioneel: staat APP_PASSWORD niet ingesteld, dan is de tool open.
+    if (!passwordOk(req, process.env)) {
       throw fail(401, 'auth_required', 'Onjuist wachtwoord.');
     }
     if (!process.env.ANTHROPIC_API_KEY) {
@@ -83,7 +92,9 @@ export default async function handler(req, res) {
     const body = typeof req.body === 'string' ? safeParse(req.body) : req.body || {};
     const url = String(body.url ?? '').trim();
     const rejectedKeyword = String(body.keyword ?? '').trim().slice(0, MAX_KEYWORD_CHARS);
-    const source = body.source === 'ahrefs' ? 'ahrefs' : 'gsc';
+    // 'gsc' = de marketeer stuurt een export mee. Al het andere ('auto', en 'ahrefs'
+    // van de bestaande knop) = automatisch: Search Console via het service account plus Ahrefs.
+    const mode = body.source === 'gsc' ? 'upload' : 'auto';
     const intent = readIntent(body.intent);
     const round = Math.min(Math.max(Number.parseInt(body.round, 10) || 0, 0), 9);
     const ahrefsKey = process.env.AHREFS_API_KEY || null;
@@ -94,39 +105,31 @@ export default async function handler(req, res) {
 
     const startedAt = Date.now();
 
-    // --- 1. De lijst ------------------------------------------------------------------
-    let rows;
-    if (source === 'ahrefs') {
-      if (!ahrefsKey) throw fail(500, 'no_ahrefs_key', 'AHREFS_API_KEY is niet ingesteld op de server.');
-      rows = await fetchOrganicKeywords(url, { apiKey: ahrefsKey });
-      if (rows.length === 0) {
-        throw fail(404, 'ahrefs_no_keywords', 'Ahrefs kent geen zoekwoorden waarop deze URL rankt. Laad een Search Console-export in.');
-      }
-    } else {
-      const text = String(body.gsc ?? '');
-      if (!text.trim()) throw fail(400, 'gsc_empty', 'Er is geen Search Console-export meegestuurd.');
-      if (text.length > MAX_GSC_CHARS) throw fail(413, 'gsc_too_large', 'Het bestand is groter dan 1 MB.');
-      rows = parseGscExport(text);
-    }
+    // --- 1. De pagina: eerst, want Search Console wil de definitieve URL na redirects ---
+    const target = await fetchPage(url);
 
-    // --- 2 en 3. Pagina en cijfers --------------------------------------------------------
-    const [target, metrics] = await Promise.all([
-      fetchPage(url),
-      ahrefsKey
-        ? fetchKeywordOverview(rows.slice(0, MAX_ENRICHED_ROWS).map((row) => row.query), { apiKey: ahrefsKey, detail: 'basic' })
-            .catch((error) => {
-              console.warn('Verrijking met Ahrefs mislukt:', error.message);
-              return new Map();
-            })
-        : Promise.resolve(new Map()),
-    ]);
+    // --- 2. De lijst: export, of Search Console plus Ahrefs met fallback ------------------
+    const list = await collectKeywordRows({
+      mode, pageUrl: target.url, uploadText: body.gsc, env: process.env, ahrefsKey,
+    });
+    const { rows } = list;
+
+    // --- 3. Alleen rijen zonder volume verrijken: de rest heeft het al van Ahrefs --------
+    const unenriched = rows.filter((row) => row.volume === null || row.volume === undefined).slice(0, MAX_ENRICHED_ROWS);
+    const metrics = ahrefsKey && unenriched.length
+      ? await fetchKeywordOverview(unenriched.map((row) => row.query), { apiKey: ahrefsKey, detail: 'basic' })
+          .catch((error) => {
+            console.warn('Verrijking met Ahrefs mislukt:', error.message);
+            return new Map();
+          })
+      : new Map();
 
     // --- 4. Claude kiest -------------------------------------------------------------------
     const client = createClient();
     const answer = await askClaude(client, {
       system: REFOCUS_SYSTEM_PROMPT,
       schema: REFOCUS_SCHEMA,
-      message: buildRefocusMessage({ target, rejectedKeyword, intent, rows: rows.slice(0, MAX_ROWS_FOR_MODEL), metrics, source }),
+      message: buildRefocusMessage({ target, rejectedKeyword, intent, rows: rows.slice(0, MAX_ROWS_FOR_MODEL), metrics, source: list.source, gsc: list.gsc }),
       maxTokens: 4_000,
       effort: 'medium',
     });
@@ -156,14 +159,15 @@ export default async function handler(req, res) {
 
     let choice = null;
     if (verified.pick) {
-      choice = { ...withMetrics(verified.pick, metrics), source, verified: true };
+      choice = { ...withMetrics(verified.pick, metrics), verified: true };
     } else {
       const usable = proposals.find((item) => item.verified);
       if (usable) choice = { ...usable, source: 'ai' };
     }
 
     log('Herfocus afgerond', startedAt, {
-      bron: source,
+      bron: list.source,
+      gsc: list.gsc?.status ?? 'upload',
       rijen: rows.length,
       keuze: choice?.keyword || null,
       keuze_bron: choice?.source || null,
@@ -173,7 +177,11 @@ export default async function handler(req, res) {
     });
 
     res.status(200).json({
-      source,
+      // source: wat er in de lijst zit ('hybrid_gsc_ahrefs', 'ahrefs_only', 'gsc_only', 'gsc_upload');
+      // gsc_error: Search Console werd geprobeerd en mislukte. Details in gsc.status en gsc.message.
+      source: list.source,
+      gsc_error: list.gsc_error,
+      gsc: list.gsc,
       round,
       rejectedKeyword,
       rowCount: rows.length,
@@ -186,9 +194,7 @@ export default async function handler(req, res) {
       choice,
       alternatives: verified.alternatives.map((item) => withMetrics(item, metrics)),
       proposals,
-      note: source === 'ahrefs'
-        ? 'De lijst is een schatting van Ahrefs, geen meting van Google. Klikken en vertoningen ontbreken daarom.'
-        : 'De lijst komt uit jouw Search Console-export: gemeten vertoningen en klikken.',
+      note: list.note,
     });
   } catch (error) {
     if (error.code && error.status) {

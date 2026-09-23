@@ -12,16 +12,30 @@ import { describePageType } from '../lib/pagetype.js';
 import { measureSerp, keywordPlacement, verifyIntent } from '../lib/intent.js';
 import { verifyRefocus } from '../lib/refocus.js';
 import { mappingCandidates, buildReport } from '../lib/compare.js';
+import {
+  normalizePrivateKey, readCredentials, matchProperty, pageVariants, classifyGscError, toRow, fetchPageQueries,
+  searchConsoleAllowed,
+} from '../lib/searchconsole.js';
+import { collectKeywordRows } from '../lib/keywordsources.js';
+import { passwordOk } from '../lib/auth.js';
+import { mergeKeywordLists, sourceFlags, pageInsight, isMeasured } from '../lib/hybrid.js';
 
 let passed = 0;
+const queue = [];
 function test(name, fn) {
-  try {
-    fn();
-    passed += 1;
-    console.log(`✓ ${name}`);
-  } catch (error) {
-    console.error(`✗ ${name}\n  ${error.message}`);
-    process.exitCode = 1;
+  queue.push({ name, fn });
+}
+
+async function runAll() {
+  for (const { name, fn } of queue) {
+    try {
+      await fn();
+      passed += 1;
+      console.log(`✓ ${name}`);
+    } catch (error) {
+      console.error(`✗ ${name}\n  ${error.message}`);
+      process.exitCode = 1;
+    }
   }
 }
 
@@ -271,4 +285,166 @@ test('buildReport: mapping, plaatsing en "niet doen" worden gecontroleerd', () =
   assert.equal(report.serp.results[0].pageTypeLabel, 'productoverzicht');
 });
 
+
+// --- Search Console en de smart fallback ------------------------------------------------
+
+const PEM = '-----BEGIN PRIVATE KEY-----\nMIIEabc\nDEF==\n-----END PRIVATE KEY-----';
+
+test('normalizePrivateKey: letterlijke \\n, echte regeleindes, CRLF en aanhalingstekens', () => {
+  const expected = PEM + '\n';
+  assert.equal(normalizePrivateKey(PEM.replace(/\n/g, '\\n')), expected);
+  assert.equal(normalizePrivateKey('"' + PEM.replace(/\n/g, '\\n') + '"'), expected);
+  assert.equal(normalizePrivateKey(PEM), expected);
+  assert.equal(normalizePrivateKey(PEM.replace(/\n/g, '\r\n')), expected);
+  assert.equal(normalizePrivateKey('geen sleutel'), null);
+  assert.equal(normalizePrivateKey('-----BEGIN PRIVATE KEY-----\nMIIE'), null); // afgekapt
+});
+
+test('readCredentials: niets ingesteld, half ingesteld en compleet', () => {
+  assert.equal(readCredentials({}), null);
+  assert.deepEqual(readCredentials({ GOOGLE_CLIENT_EMAIL: 'x@y.iam.gserviceaccount.com' }), { invalid: true });
+  assert.deepEqual(readCredentials({ GOOGLE_CLIENT_EMAIL: 'x@y', GOOGLE_PRIVATE_KEY: PEM }), { email: 'x@y', key: PEM + '\n' });
+});
+
+test('matchProperty: URL-prefix gaat voor domein, niet-geverifieerd telt niet', () => {
+  const sites = [
+    { siteUrl: 'sc-domain:klant.nl', permissionLevel: 'siteFullUser' },
+    { siteUrl: 'https://www.klant.nl/', permissionLevel: 'siteRestrictedUser' },
+    { siteUrl: 'https://www.klant.nl/blog/', permissionLevel: 'siteOwner' },
+    { siteUrl: 'sc-domain:ander.nl', permissionLevel: 'siteUnverifiedUser' },
+  ];
+  assert.equal(matchProperty(sites, 'https://www.klant.nl/blog/artikel'), 'https://www.klant.nl/blog/');
+  assert.equal(matchProperty(sites, 'https://www.klant.nl/diensten/'), 'https://www.klant.nl/');
+  assert.equal(matchProperty(sites, 'https://shop.klant.nl/x'), 'sc-domain:klant.nl');
+  assert.equal(matchProperty(sites, 'http://www.klant.nl/x'), 'sc-domain:klant.nl'); // http valt niet onder de https-prefix
+  assert.equal(matchProperty(sites, 'https://www.ander.nl/x'), null);
+  assert.equal(matchProperty(sites, 'https://nietklant.nl/x'), null); // geen suffix-truc
+  assert.equal(matchProperty([], 'geen url'), null);
+});
+
+test('pageVariants: met en zonder slash, zonder trackingparameters, homepage één padvorm', () => {
+  assert.deepEqual(pageVariants('https://www.x.nl/a/b/'), ['https://www.x.nl/a/b/', 'https://www.x.nl/a/b']);
+  assert.deepEqual(pageVariants('https://www.x.nl/a/b'), ['https://www.x.nl/a/b', 'https://www.x.nl/a/b/']);
+  assert.deepEqual(pageVariants('https://www.x.nl/a?c=1#top'),
+    ['https://www.x.nl/a?c=1', 'https://www.x.nl/a/?c=1', 'https://www.x.nl/a', 'https://www.x.nl/a/']);
+  assert.deepEqual(pageVariants('https://www.x.nl/a/?utm_source=nieuwsbrief'),
+    ['https://www.x.nl/a/?utm_source=nieuwsbrief', 'https://www.x.nl/a?utm_source=nieuwsbrief', 'https://www.x.nl/a/', 'https://www.x.nl/a']);
+  assert.deepEqual(pageVariants('https://www.x.nl/?gclid=abc'), ['https://www.x.nl/?gclid=abc', 'https://www.x.nl/']);
+  assert.deepEqual(pageVariants('https://www.x.nl/'), ['https://www.x.nl/']);
+});
+
+test('classifyGscError: 403 is geen toegang, API uit, sleutel, limiet, timeout', () => {
+  assert.equal(classifyGscError({ status: 403, message: "User does not have sufficient permission for site 'sc-domain:x.nl'." }).status, 'geen_toegang');
+  assert.equal(classifyGscError({ status: 403, errors: [{ reason: 'accessNotConfigured' }], message: 'x' }).status, 'api_uit');
+  assert.equal(classifyGscError({ status: 403, message: 'Google Search Console API has not been used in project 1 before' }).status, 'api_uit');
+  assert.equal(classifyGscError({ message: 'invalid_grant: Invalid JWT Signature.' }).status, 'sleutel_ongeldig');
+  assert.equal(classifyGscError({ status: 401, message: 'x' }).status, 'sleutel_ongeldig');
+  assert.equal(classifyGscError({ status: 429, message: 'x' }).status, 'limiet');
+  assert.equal(classifyGscError({ code: 'GSC_TIMEOUT', message: 'timeout' }).status, 'timeout');
+  assert.equal(classifyGscError({ status: 500, message: 'backend' }).status, 'fout');
+  assert.match(classifyGscError({ status: 403, message: 'x' }, { email: 'sa@x' }).message, /sa@x/);
+});
+
+test('toRow: CTR van fractie naar procent, afgerond', () => {
+  assert.deepEqual(toRow({ keys: ['pregis paper'], clicks: 5, impressions: 484, ctr: 0.010330578, position: 13.008 }),
+    { query: 'pregis paper', clicks: 5, impressions: 484, ctr: 1, position: 13 });
+});
+
+test('searchConsoleAllowed: publieke deploy zonder wachtwoord geeft geen klantdata', () => {
+  assert.equal(searchConsoleAllowed({}), true); // lokaal
+  assert.equal(searchConsoleAllowed({ VERCEL_ENV: 'development' }), true); // vercel dev
+  assert.equal(searchConsoleAllowed({ VERCEL_ENV: 'production' }), false);
+  assert.equal(searchConsoleAllowed({ VERCEL_ENV: 'preview' }), false);
+  assert.equal(searchConsoleAllowed({ VERCEL_ENV: 'production', APP_PASSWORD: 'x' }), true);
+});
+
+test('fetchPageQueries: publieke deploy zonder APP_PASSWORD roept Google niet aan', async () => {
+  const result = await fetchPageQueries('https://www.x.nl/', { env: { VERCEL_ENV: 'production', GOOGLE_CLIENT_EMAIL: 'x@y', GOOGLE_PRIVATE_KEY: PEM } });
+  assert.equal(result.status, 'niet_beveiligd');
+  assert.equal(result.attempted, false);
+  assert.equal(result.error, false);
+  assert.match(result.message, /APP_PASSWORD/);
+});
+
+test('passwordOk: open zonder wachtwoord, anders exact en in constante tijd', () => {
+  assert.equal(passwordOk({ headers: {} }, {}), true);
+  assert.equal(passwordOk({ headers: {} }, { APP_PASSWORD: 'geheim' }), false);
+  assert.equal(passwordOk({ headers: { 'x-app-password': 'gehei' } }, { APP_PASSWORD: 'geheim' }), false);
+  assert.equal(passwordOk({ headers: { 'x-app-password': 'geheim' } }, { APP_PASSWORD: 'geheim' }), true);
+});
+
+test('collectKeywordRows: zonder Ahrefs-sleutel en zonder Search Console de echte oorzaak', async () => {
+  await assert.rejects(
+    collectKeywordRows({ mode: 'auto', pageUrl: 'https://www.x.nl/', env: {}, ahrefsKey: null }),
+    (error) => error.code === 'no_ahrefs_key' && /Search Console/.test(error.message)
+  );
+});
+
+test('fetchPageQueries: zonder of met halve sleutel geen crash, wel een status', async () => {
+  const none = await fetchPageQueries('https://www.x.nl/', { env: {} });
+  assert.equal(none.status, 'niet_ingesteld');
+  assert.equal(none.error, false);
+  assert.deepEqual(none.rows, []);
+  const half = await fetchPageQueries('https://www.x.nl/', { env: { GOOGLE_CLIENT_EMAIL: 'x@y', GOOGLE_PRIVATE_KEY: 'kapot' } });
+  assert.equal(half.status, 'sleutel_ongeldig');
+  assert.equal(half.error, true);
+});
+
+test('mergeKeywordLists: gemeten eerst, Ahrefs vult aan, bron per rij', () => {
+  const merged = mergeKeywordLists(
+    [{ query: 'Hex Dumbbells', clicks: 10, impressions: 688, ctr: 1.5, position: 5.5 }, { query: 'hex dumbbell set', clicks: 0, impressions: 90, ctr: 0, position: 12 }],
+    [{ query: 'hex dumbbells', position: 4, volume: 1300, traffic: 200, intents: { commercieel: true } }, { query: 'dumbbells', position: 30, volume: 9000, traffic: 5 }]
+  );
+  assert.deepEqual(merged.map((row) => [row.query, row.origin]), [['Hex Dumbbells', 'gsc+ahrefs'], ['hex dumbbell set', 'gsc'], ['dumbbells', 'ahrefs']]);
+  assert.equal(merged[0].impressions, 688); // de meting blijft
+  assert.equal(merged[0].position, 5.5); // de gemeten positie, niet die van Ahrefs
+  assert.equal(merged[0].volume, 1300); // het volume komt erbij
+  assert.equal(isMeasured(merged[0]) && isMeasured(merged[1]) && !isMeasured(merged[2]), true);
+});
+
+test('mergeKeywordLists: dubbele Ahrefs-rij wordt geen "beide"', () => {
+  const merged = mergeKeywordLists([], [{ query: 'zonnepanelen kosten', position: 1, traffic: 900 }, { query: 'Zonnepanelen kosten', position: 4, traffic: 50 }]);
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].origin, 'ahrefs');
+  assert.equal(merged[0].position, 1);
+  assert.equal(isMeasured(merged[0]), false);
+});
+
+test('sourceFlags: hybride, alleen Ahrefs, upload; gsc_error alleen bij een mislukte poging', () => {
+  assert.deepEqual(sourceFlags({ status: 'ok', error: false }), { source: 'hybrid_gsc_ahrefs', gsc_error: false });
+  assert.deepEqual(sourceFlags({ status: 'geen_toegang', error: true }), { source: 'ahrefs_only', gsc_error: true });
+  assert.deepEqual(sourceFlags({ status: 'niet_ingesteld', error: false }), { source: 'ahrefs_only', gsc_error: false });
+  assert.deepEqual(sourceFlags({ status: 'leeg', error: false }), { source: 'ahrefs_only', gsc_error: false });
+  assert.deepEqual(sourceFlags({ status: 'ok', error: false }, { ahrefsUsed: false }), { source: 'gsc_only', gsc_error: false });
+  assert.deepEqual(sourceFlags(null, { upload: true }), { source: 'gsc_upload', gsc_error: false });
+  assert.deepEqual(sourceFlags({ status: 'geen_toegang', error: true }, { ahrefsUsed: false }), { source: 'serp_only', gsc_error: true });
+});
+
+test('pageInsight: het focus zoekwoord en de top-zoekopdrachten', () => {
+  const gsc = { status: 'ok', rows: [{ query: 'pregis paper', impressions: 484, clicks: 5 }, { query: 'Paper Packing Machine', impressions: 99, clicks: 9 }] };
+  const insight = pageInsight(gsc, 'paper packing machine');
+  assert.equal(insight.focusKeyword.impressions, 99);
+  // Zonder paginatotaal: de som, en eerlijk gelabeld als som van wat Search Console toont.
+  assert.deepEqual(insight.totals, { queries: 2, scope: 'getoonde_zoekopdrachten', impressions: 583, clicks: 14, position: null });
+  // Met paginatotaal: dat is hoger dan de som, want Google anonimiseert zeldzame zoekopdrachten.
+  const withTotals = pageInsight({ ...gsc, pageTotals: { impressions: 18962, clicks: 174, ctr: 0.9, position: 9.1 } }, 'x');
+  assert.deepEqual(withTotals.totals, { queries: 2, scope: 'pagina', impressions: 18962, clicks: 174, position: 9.1 });
+  assert.equal(withTotals.focusKeyword, null);
+  assert.equal(pageInsight({ status: 'geen_toegang', rows: [] }, 'x'), null);
+});
+
+test('mappingCandidates: Search Console-zoekopdrachten als kandidaat, na de Ahrefs-ideeën', () => {
+  const candidates = mappingCandidates(
+    [{ keyword: 'paper packaging systems', volume: 90, sources: ['bevat het zoekwoord'] }],
+    { organic: [] },
+    'paper packaging machine',
+    [{ query: 'paper packaging systems', impressions: 40, position: 9.2 }, { query: 'pregis easypack', impressions: 62, position: 5 }, { query: 'paper packaging machine', impressions: 99 }]
+  );
+  assert.deepEqual(candidates.map((item) => item.keyword), ['paper packaging systems', 'pregis easypack']);
+  assert.ok(candidates[0].sources.some((source) => source.startsWith('Search Console: 40 vertoningen')));
+  assert.equal(candidates[1].volume, null);
+  assert.equal(candidates[1].impressions, 62);
+});
+
+await runAll();
 console.log(`\n${passed} controles geslaagd${process.exitCode ? ', met fouten' : ''}.`);

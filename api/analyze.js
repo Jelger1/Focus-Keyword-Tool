@@ -4,7 +4,9 @@
  * Stap 1 en 2 van de tool, en bij een match ook stap 3A:
  *
  *   1. Doelpagina, SERP (Ahrefs) en zoekwoordcijfers tegelijk ophalen; daarna
- *      de top 10 parallel ophalen en op dezelfde manier meten.
+ *      de top 10 parallel ophalen en op dezelfde manier meten. Tegelijk met die
+ *      top 10 probeert de tool Search Console voor deze pagina (service account).
+ *      Geen toegang? Dan loopt alles door op de Ahrefs-data (smart fallback).
  *   2. Intent check: de code meet de verdeling van paginatypes, Claude oordeelt
  *      of de pagina bij de SERP past, de code controleert de geciteerde posities.
  *   3A. Match: zoekwoordideeën (Ahrefs), termen tellen, vragen verzamelen, twee
@@ -29,8 +31,11 @@ import {
   GAP_TERMS_SYSTEM_PROMPT, GAP_TERMS_SCHEMA, buildGapTermsMessage,
 } from '../lib/gap.js';
 import { describePageType } from '../lib/pagetype.js';
+import { fetchPageQueries, GSC_STATUS } from '../lib/searchconsole.js';
+import { sourceFlags, gscSummary, pageInsight } from '../lib/hybrid.js';
 import { normalize } from '../lib/text.js';
 import { clientKey, withinRateLimit } from '../lib/ratelimit.js';
+import { passwordOk } from '../lib/auth.js';
 
 const MAX_KEYWORD_CHARS = 120;
 
@@ -80,8 +85,7 @@ export default async function handler(req, res) {
 
   try {
     // Wachtwoord is optioneel: staat APP_PASSWORD niet ingesteld, dan is de tool open.
-    const requiredPassword = process.env.APP_PASSWORD;
-    if (requiredPassword && req.headers['x-app-password'] !== requiredPassword) {
+    if (!passwordOk(req, process.env)) {
       throw fail(401, 'auth_required', 'Onjuist wachtwoord.');
     }
 
@@ -128,8 +132,17 @@ export default async function handler(req, res) {
       ? optional(fetchKeywordIdeas(keyword, { apiKey: ahrefsKey }), 'Zoekwoordideeën')
       : Promise.resolve({ value: [], error: null });
 
-    const serpResults = await fetchCompetitors(serp.organic, target);
+    // Search Console wil de definitieve URL na redirects, dus pas na de pagina. Het loopt
+    // parallel met de top 10 en gooit nooit: bij geen toegang komt er een status terug.
+    const gscPromise = fetchPageQueries(target.url, { env: process.env });
+
+    const [serpResults, gsc] = await Promise.all([fetchCompetitors(serp.organic, target), gscPromise]);
     const compared = serpResults.filter((result) => result.status === 'vergeleken');
+    const gscInsight = pageInsight(gsc, keyword);
+    // Ahrefs telt als gebruikt als de SERP of de zoekwoordcijfers van Ahrefs komen;
+    // bij een match komen de zoekwoordideeën er later nog bij.
+    const ahrefsInIntent = serp.provider === 'ahrefs' || Boolean(keywordInfo);
+    const flags = sourceFlags(gsc, { ahrefsUsed: ahrefsInIntent });
 
     if (compared.length < MIN_COMPETITORS) {
       throw fail(
@@ -148,7 +161,7 @@ export default async function handler(req, res) {
     const intentAnswer = await askClaude(client, {
       system: INTENT_SYSTEM_PROMPT,
       schema: INTENT_SCHEMA,
-      message: buildIntentMessage({ keyword, target, serp, serpResults, keywordInfo, measured, providerLabel }),
+      message: buildIntentMessage({ keyword, target, serp, serpResults, keywordInfo, measured, providerLabel, gsc, gscInsight }),
       maxTokens: 4_000,
       effort: 'medium',
     });
@@ -166,6 +179,11 @@ export default async function handler(req, res) {
       intent,
       placement,
       maxRounds: MAX_ROUNDS,
+      // source: 'hybrid_gsc_ahrefs' als Search Console-data meegenomen is, anders 'ahrefs_only'.
+      // gsc_error: Search Console werd geprobeerd en mislukte (bijvoorbeeld geen toegang).
+      source: flags.source,
+      gsc_error: flags.gsc_error,
+      gsc: { ...gscSummary(gsc), insight: gscInsight },
     };
 
     if (!intent.match) {
@@ -173,6 +191,7 @@ export default async function handler(req, res) {
         zoekwoord: keyword,
         ronde: origin.round,
         mismatch: intent.mismatch?.kind,
+        gsc: gsc.status,
         input_tokens: intentAnswer.usage?.input_tokens,
         output_tokens: intentAnswer.usage?.output_tokens,
       });
@@ -186,7 +205,7 @@ export default async function handler(req, res) {
 
     // --- Stap 3A: content gap, keyword mapping en optimalisatie --------------------------
     const ideas = await ideasPromise;
-    const mapping = mappingCandidates(ideas.value || [], serp, keyword);
+    const mapping = mappingCandidates(ideas.value || [], serp, keyword, gsc.status === GSC_STATUS.ok ? gsc.rows : []);
     const candidates = termCandidates(compared.map((competitor) => competitor.page), target, keyword);
     const questions = collectQuestions(serp.peopleAlsoAsk, compared);
     const pageTypeOf = (raw) => describePageType(raw)?.label || raw;
@@ -227,12 +246,14 @@ export default async function handler(req, res) {
       onderwerpen_zonder_bron: report.quality.droppedTopics,
       mapping_afgekeurd: report.quality.droppedMapping,
       ideeen: (ideas.value || []).length,
+      gsc: gsc.status,
       dekking: report.coverage.score,
       input_tokens: usage.reduce((sum, item) => sum + (item.input_tokens || 0), 0),
       output_tokens: usage.reduce((sum, item) => sum + (item.output_tokens || 0), 0),
     });
 
-    res.status(200).json({ stage: 'compleet', ...base, ...report, ideasError: ideas.error });
+    const finalFlags = sourceFlags(gsc, { ahrefsUsed: ahrefsInIntent || (ideas.value || []).length > 0 });
+    res.status(200).json({ stage: 'compleet', ...base, ...report, ...finalFlags, ideasError: ideas.error });
   } catch (error) {
     if (error.code && error.status) {
       res.status(error.status).json({ error: error.message, code: error.code });

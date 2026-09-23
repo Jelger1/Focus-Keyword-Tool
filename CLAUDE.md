@@ -51,7 +51,11 @@ Functions.
 | `lib/compare.js` | Termen tellen, vragen verzamelen, mapping-kandidaten, en elke bewering van Claude controleren (`buildReport`). |
 | `lib/refocus.js` | Instructie, schema en controle van de herfocus. |
 | `lib/gsc.js` | Search Console-exports lezen. |
+| `lib/searchconsole.js` | Search Console API via een service account. Gooit nooit; geeft altijd een status. |
+| `lib/hybrid.js` | Search Console en Ahrefs samenvoegen, bron per zoekwoordrij, de vlaggen `source` en `gsc_error`. |
+| `lib/keywordsources.js` | De zoekwoordlijst voor de herfocus: export, of Search Console plus Ahrefs met terugval. |
 | `lib/claude.js` | De gedeelde Claude-aanroep (model, schema-output, server-side terugval). |
+| `lib/auth.js` | Het optionele wachtwoord, in constante tijd vergeleken. |
 | `lib/pagetype.js`, `lib/text.js`, `lib/ratelimit.js` | Paginatypes van Ahrefs vertalen, normalisatie en stemming, rate limit. |
 | `test/run.js` | `npm test`: controles van de meet- en controlecode, zonder externe calls. |
 | `vercel.json` | Functie-instellingen (timeouts). |
@@ -81,6 +85,19 @@ Regels:
   Houd die scheiding intact.
 - **Elke externe fetch heeft een timeout** en een nette foutboodschap in het
   Nederlands; een onbereikbare URL mag de tool nooit laten hangen.
+- **Search Console is een aanvulling, nooit een voorwaarde (smart fallback).** Het
+  service account heeft alleen toegang tot klanten die het als gebruiker toevoegden.
+  `fetchPageQueries()` gooit daarom nooit; bij geen toegang, geen sleutel of een
+  storing loopt de analyse door op Ahrefs. Elk API-antwoord zegt via `source`,
+  `gsc_error` en `gsc.status` wat er gebruikt is. Houd elke zoekwoordrij voorzien
+  van zijn herkomst (`origin`): de UI moet meting en schatting kunnen scheiden.
+- **Search Console-data is klantdata.** Op een publieke Vercel-deploy draait
+  Search Console alleen met `APP_PASSWORD` (`searchConsoleAllowed()`); het wachtwoord
+  wordt in constante tijd vergeleken (`lib/auth.js`). Haal die drempel niet weg.
+- **Service account-sleutels nooit in de map.** Ze horen in `.env.local` en in
+  Vercel; `.gitignore` en `.vercelignore` weren JSON-sleutelbestanden in `api/`.
+  Print nooit een omgevingsvariabele met een regel-filter: een meerregelige sleutel
+  lekt dan vanaf de tweede regel. Lees sleutels alleen via `readCredentials()`.
 - **Ahrefs-units zijn geld.** Vraag alleen de velden op die gebruikt worden
   (`select`), verrijk lijsten tot een vast maximum en cache niets in de browser
   wat de server opnieuw zou moeten ophalen.
@@ -109,9 +126,9 @@ Regels:
 ## Grenzen
 
 - **Verzin geen data.** Is een cijfer gesimuleerd of geschat, benoem dat in de UI.
-  De marketeer moet het verschil zien tussen een meting (Search Console, gemeten
-  koppen en woorden) en een schatting (Ahrefs-volumes, rankende zoekwoorden via
-  Ahrefs). Er is bewust geen terugval op verzonnen SERP-data als Ahrefs faalt:
+  De marketeer moet het verschil zien tussen een meting (Search Console, via de API
+  of een export, en gemeten koppen en woorden) en een schatting (Ahrefs-volumes,
+  rankende zoekwoorden via Ahrefs). Er is bewust geen terugval op verzonnen SERP-data als Ahrefs faalt:
   dan faalt de analyse met een duidelijke melding.
 - **Toon altijd de bronnen.** Met welke URL's vergeleken is, welke kop bij welke
   concurrent een onderwerp onderbouwt, welke posities een intent-argument dragen,

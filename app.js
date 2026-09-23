@@ -50,6 +50,9 @@ const URL_PATTERN = /^(https?:\/\/\S+|([a-z0-9-]+\.)+[a-z]{2,}(:\d+)?([/?#]\S*)?
 
 const MAX_GSC_BYTES = 1_000_000;
 
+/** Kolommen die wegvallen waar de kaart smal is: op mobiel, en op 1024-1279px waar de resultaatkolom drie vijfde breed is. */
+const NARROW_HIDDEN = 'hidden md:table-cell lg:hidden xl:table-cell';
+
 /** Grotere exports bewaren we niet in de browser: localStorage heeft maar een paar MB. */
 const MAX_STORED_GSC_CHARS = 400_000;
 
@@ -651,13 +654,42 @@ function refocusCard(report, options = {}) {
   return wrapper;
 }
 
+/** Korte bronlabels per zoekwoordrij: meting (Search Console) of schatting (Ahrefs). */
+const ORIGIN_LABELS = {
+  gsc: { text: 'Search Console', short: 'GSC', pill: 'pill-good' },
+  upload: { text: 'Search Console', short: 'GSC', pill: 'pill-good' },
+  'gsc+ahrefs': { text: 'Search Console + Ahrefs', short: 'GSC + Ahrefs', pill: 'pill-good' },
+  ahrefs: { text: 'Ahrefs (schatting)', short: 'Ahrefs', pill: 'pill-mid' },
+};
+
+/**
+ * "Positie" betekent per bron iets anders: gemiddeld over 90 dagen in Search
+ * Console, de beste positie in Nederland bij Ahrefs. Een Ahrefs-positie krijgt
+ * daarom een ~ en het woord Ahrefs erbij.
+ */
+function positionLabel(position, origin, { short = false } = {}) {
+  if (position === null || position === undefined) return null;
+  const value = String(position).replace('.', ',');
+  if (origin === 'ahrefs') return short ? `~${value}` : `~${value} (Ahrefs)`;
+  return `gem. ${value}`;
+}
+
+/**
+ * De bron van een herfocuslijst als geheel: 'ahrefs' (schatting) of 'gsc' (meting).
+ * Kent zowel de nieuwe waarden van de server (ahrefs_only, hybrid_gsc_ahrefs,
+ * gsc_only, gsc_upload) als de oude (ahrefs, gsc) uit een opgeslagen rapport.
+ */
+function listSourceOf(result) {
+  return result?.source === 'ahrefs' || result?.source === 'ahrefs_only' ? 'ahrefs' : 'gsc';
+}
+
 /** Alternatieven en voorstellen uit een eerdere herfocus, zonder het zoekwoord dat nu net faalde. */
 function previousRoundOptions(report) {
   if (!lastRefocus || lastRefocus.rejectedKeyword === report.keyword) return [];
   const current = report.keyword.toLowerCase();
-  const listSource = lastRefocus.source === 'ahrefs' ? 'ahrefs' : 'gsc';
+  const listSource = listSourceOf(lastRefocus);
   const options = [
-    ...(lastRefocus.alternatives || []).map((item) => ({ ...item, source: listSource })),
+    ...(lastRefocus.alternatives || []).map((item) => ({ ...item, source: item.source || listSource })),
     ...(lastRefocus.proposals || []).filter((item) => item.verified).map((item) => ({ ...item, source: 'ai' })),
   ];
   return options.filter((item) => item.keyword.toLowerCase() !== current);
@@ -770,7 +802,7 @@ function refocusForm(report) {
  */
 function refocusResult(result, report, options = {}) {
   const box = el('div', 'space-y-4');
-  const listSource = result.source === 'ahrefs' ? 'ahrefs' : 'gsc';
+  const listSource = listSourceOf(result);
 
   box.append(el('p', 'notice text-xs leading-5 text-pm-muted', result.note));
   if (result.pageSummary) {
@@ -829,26 +861,29 @@ function refocusResult(result, report, options = {}) {
     const head = el('thead');
     const headRow = el('tr');
     // Op een smal scherm vallen klikken en volume weg: zoekwoord, vertoningen en positie passen dan.
-    [['Zoekwoord', ''], ['Klikken', 'hidden md:table-cell'], ['Vertoningen', ''], ['Positie', ''], ['Volume', 'hidden md:table-cell']]
+    // Klikken en volume vallen weg waar de kaart smal is, net als in de SERP-tabel.
+    [['Zoekwoord', ''], ['Bron', 'hidden sm:table-cell'], ['Klikken', NARROW_HIDDEN], ['Vertoningen', ''], ['Positie', ''], ['Volume', NARROW_HIDDEN]]
       .forEach(([label, className]) => headRow.append(el('th', className || null, label)));
     head.append(headRow);
     const rows = el('tbody');
     result.rows.forEach((row) => {
       const tr = el('tr');
       tr.append(
-        el('td', 'break-anywhere', row.query),
-        el('td', 'tabular-nums hidden md:table-cell', fmt(row.clicks)),
+        queryCell(row),
+        originCell(row.origin),
+        el('td', `tabular-nums ${NARROW_HIDDEN}`, fmt(row.clicks)),
         el('td', 'tabular-nums', fmt(row.impressions)),
-        el('td', 'tabular-nums', row.position != null ? String(row.position).replace('.', ',') : '—'),
-        el('td', 'tabular-nums hidden md:table-cell', fmt(row.volume))
+        el('td', 'tabular-nums whitespace-nowrap', positionLabel(row.position, row.origin, { short: true }) || '—'),
+        el('td', `tabular-nums ${NARROW_HIDDEN}`, fmt(row.volume))
       );
       rows.append(tr);
     });
     table.append(head, rows);
     const wrap = el('div', 'table-wrap');
     wrap.append(table);
+    const legend = el('p', 'mt-2 text-xs leading-5 text-pm-muted', 'GSC = Search Console, gemeten over 90 dagen. Ahrefs = schatting. Positie: gem. = gemiddelde in Search Console, ~ = beste positie in Nederland volgens Ahrefs.');
     const topNote = result.rowCount > result.rows.length ? ` (top ${result.rows.length})` : '';
-    box.append(details(`Bekijk de ${result.rowCount} zoekwoorden uit de lijst${topNote}`, [wrap]));
+    box.append(details(`Bekijk de ${result.rowCount} zoekwoorden uit de lijst${topNote}`, [wrap, legend]));
   }
 
   if (!options.done && !options.autoStart) {
@@ -866,6 +901,21 @@ function refocusResult(result, report, options = {}) {
   return box;
 }
 
+/** Op een telefoon staat de bron onder het zoekwoord: een eigen kolom past daar niet. */
+function queryCell(row) {
+  const cell = el('td', 'break-anywhere', row.query);
+  const label = ORIGIN_LABELS[row.origin];
+  if (label) cell.append(el('span', `sm:hidden mt-1 block w-fit pill ${label.pill}`, label.short));
+  return cell;
+}
+
+function originCell(origin) {
+  const cell = el('td', 'hidden sm:table-cell');
+  const label = ORIGIN_LABELS[origin];
+  cell.append(label ? el('span', `pill ${label.pill}`, label.short) : document.createTextNode('—'));
+  return cell;
+}
+
 function candidateList(title, items, source, report, { withButtons = true } = {}) {
   const block = el('div', 'space-y-2');
   block.append(sectionLabel(title));
@@ -876,12 +926,16 @@ function candidateList(title, items, source, report, { withButtons = true } = {}
     const left = el('div', 'flex flex-wrap items-center gap-1.5');
     left.append(el('span', 'text-sm font-bold', item.keyword));
     if (item.fit) left.append(el('span', `pill ${item.fit === 'goed' ? 'pill-good' : 'pill-mid'}`, `past ${item.fit}`));
-    if (typeof item.volume === 'number') left.append(el('span', 'pill', `${fmt(item.volume)} per maand`));
+    if (typeof item.volume === 'number') left.append(el('span', 'pill', `${fmt(item.volume)} per maand (Ahrefs, NL)`));
     else if (source === 'ai') left.append(el('span', 'pill pill-bad', 'geen volume bekend'));
+    const origin = item.row?.origin || (item.source === 'ahrefs' ? 'ahrefs' : item.source === 'gsc' ? 'gsc' : null);
+    if (ORIGIN_LABELS[origin]) left.append(el('span', `pill ${ORIGIN_LABELS[origin].pill}`, ORIGIN_LABELS[origin].text));
     if (item.row?.impressions != null) left.append(el('span', 'pill', `${fmt(item.row.impressions)} vertoningen`));
-    if (item.row?.position != null) left.append(el('span', 'pill', `positie ${String(item.row.position).replace('.', ',')}`));
+    const position = positionLabel(item.row?.position, origin);
+    if (position) left.append(el('span', 'pill', `positie ${position}`));
     top.append(left);
-    if (withButtons) top.append(analyseWithButton(item.keyword, source, item.why, report));
+    // De server geeft per zoekwoord de bron mee (Search Console of Ahrefs); anders die van de lijst.
+    if (withButtons) top.append(analyseWithButton(item.keyword, item.source || source, item.why, report));
     li.append(top);
     if (item.why) li.append(el('p', 'text-xs leading-5 text-pm-muted', item.why));
     list.append(li);
@@ -918,9 +972,9 @@ function focusCard(report) {
 
     const refocus = refocusFor(report);
     if (refocus) {
-      const listSource = refocus.source === 'ahrefs' ? 'ahrefs' : 'gsc';
+      const listSource = listSourceOf(refocus);
       const options = [
-        ...(refocus.alternatives || []).map((item) => ({ ...item, source: listSource })),
+        ...(refocus.alternatives || []).map((item) => ({ ...item, source: item.source || listSource })),
         ...(refocus.proposals || []).filter((item) => item.verified).map((item) => ({ ...item, source: 'ai' })),
       ].filter((item) => item.keyword.toLowerCase() !== report.keyword.toLowerCase());
       if (options.length) {
@@ -976,11 +1030,17 @@ function placementCard(report) {
 /** 4. Keyword mapping: primary, secondary, supporting, varianten en merktermen, met zoekvolume. */
 function mappingCard(report) {
   const { mapping, keywordInfo } = report;
-  const { wrapper } = card('Aanbevolen keyword mapping', 'Gekozen uit zoekwoordideeën van Ahrefs en de topzoekwoorden van de concurrenten');
+  const withGsc = report.gsc?.status === 'ok';
+  const { wrapper } = card(
+    'Aanbevolen keyword mapping',
+    withGsc
+      ? 'Gekozen uit zoekwoordideeën van Ahrefs, de topzoekwoorden van de concurrenten en de zoekopdrachten uit Search Console van deze pagina'
+      : 'Gekozen uit zoekwoordideeën van Ahrefs en de topzoekwoorden van de concurrenten'
+  );
   const body = el('div', 'p-5 space-y-3');
 
   const groups = [
-    ['Primary', [{ keyword: mapping.primary, volume: keywordInfo?.volume ?? null, why: '' }], 'pill-good'],
+    ['Primary', [{ keyword: mapping.primary, volume: keywordInfo?.volume ?? null, impressions: report.gsc?.insight?.focusKeyword?.impressions ?? null, why: '' }], 'pill-good'],
     ['Secondary', mapping.secondary, 'pill-info'],
     ['Supporting', mapping.supporting, ''],
     ['Varianten', mapping.variants, ''],
@@ -995,14 +1055,16 @@ function mappingCard(report) {
       list.append(el('span', 'text-sm text-pm-muted', 'geen'));
     } else {
       items.forEach((item) => {
-        list.append(el('span', `pill ${pillClass}`, typeof item.volume === 'number' ? `${item.keyword} (${fmt(item.volume)})` : item.keyword));
+        list.append(el('span', `pill ${pillClass}`, mappingLabel(item)));
       });
     }
     row.append(list);
     body.append(row);
   });
 
-  body.append(el('p', 'text-xs leading-5 text-pm-muted', 'Tussen haakjes het zoekvolume per maand volgens Ahrefs.'));
+  body.append(el('p', 'text-xs leading-5 text-pm-muted', withGsc
+    ? 'Tussen haakjes het zoekvolume per maand volgens Ahrefs (schatting) en de vertoningen van deze pagina in Search Console (meting, 90 dagen).'
+    : 'Tussen haakjes het zoekvolume per maand volgens Ahrefs (schatting).'));
 
   // De redenen staan in de pagina zelf, niet in een tooltip: die zie je niet op
   // een telefoon en niet met het toetsenbord.
@@ -1025,9 +1087,18 @@ function mappingCard(report) {
   return wrapper;
 }
 
+/** "zoekwoord (volume · vertoningen)": elk cijfer met zijn bron, in de kaart én in de export. */
+function mappingLabel(item) {
+  const facts = [
+    typeof item.volume === 'number' ? `${fmt(item.volume)} per maand, Ahrefs` : null,
+    typeof item.impressions === 'number' ? `${fmt(item.impressions)} vertoningen, Search Console` : null,
+  ].filter(Boolean);
+  return facts.length ? `${item.keyword} (${facts.join(' · ')})` : item.keyword;
+}
+
 function mappingMarkdown(report) {
   const { mapping } = report;
-  const line = (items) => (items.length ? items.map((item) => (typeof item.volume === 'number' ? `${item.keyword} (${item.volume})` : item.keyword)).join(', ') : 'geen');
+  const line = (items) => (items.length ? items.map(mappingLabel).join(', ') : 'geen');
   return [
     '## Aanbevolen keyword mapping',
     '',
