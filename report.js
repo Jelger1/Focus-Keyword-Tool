@@ -166,13 +166,13 @@ function kpiTile({ label, value, unit, notes = [], provNode, bar, tone, empty = 
 /** Sleutel-waardelijst. Een waarde is tekst of een node; de bron staat erachter. */
 function factsList(rows) {
   const list = el('dl', 'facts');
-  rows.filter(Boolean).forEach(({ label, value, provNode, sub }) => {
+  rows.filter(Boolean).forEach(({ label, value, provNode, sub, subClass }) => {
     const row = el('div');
     row.append(el('dt', null, label));
     const dd = el('dd');
     dd.append(typeof value === 'string' ? document.createTextNode(value) : value);
     if (provNode) dd.append(provNode);
-    if (sub) dd.append(el('span', 'cell-sub', sub));
+    if (sub) dd.append(el('span', subClass ? `cell-sub ${subClass}` : 'cell-sub', sub));
     row.append(dd);
     list.append(row);
   });
@@ -1197,7 +1197,10 @@ function bronnenCard(report) {
       label: 'Search Console',
       value: gscValue,
       provNode: gsc?.status === 'ok' ? prov('meting', PROV_TEXT.gsc) : null,
-      sub: gsc?.status === 'ok' ? gsc.message : '',
+      // Zonder Search Console de precieze reden, zodat de marketeer weet wat er moet
+      // gebeuren; alleen op het scherm, want een instelfout hoort niet in de pdf voor de klant.
+      sub: gsc?.message || '',
+      subClass: gsc?.status === 'ok' ? '' : 'screen-only',
     },
     { label: 'Regio', value: `Google ${region.label} · teksten in het ${region.language}; uitleg in het Nederlands` },
     { label: 'Vergeleken', value: `${vergeleken} concurrenten (van ${serp.results.length} resultaten)` },

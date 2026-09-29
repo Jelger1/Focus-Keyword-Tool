@@ -6,6 +6,7 @@
  */
 
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import { parseGscExport } from '../lib/gsc.js';
 import { phraseCoverage, normalize, repairLatexDiaeresis } from '../lib/text.js';
 import { describePageType } from '../lib/pagetype.js';
@@ -13,7 +14,8 @@ import { measureSerp, keywordPlacement, verifyIntent } from '../lib/intent.js';
 import { verifyRefocus } from '../lib/refocus.js';
 import { mappingCandidates, buildReport, topicHeadings, termCandidates } from '../lib/compare.js';
 import {
-  normalizePrivateKey, readCredentials, matchProperty, pageVariants, classifyGscError, toRow, fetchPageQueries,
+  normalizePrivateKey, parsePrivateKey, readCredentials, describeValue, checkSearchConsole,
+  matchProperty, pageVariants, classifyGscError, toRow, fetchPageQueries,
 } from '../lib/searchconsole.js';
 import { readRegion, REGIONS, regionInstruction } from '../lib/region.js';
 import { createProgress } from '../lib/progress.js';
@@ -298,22 +300,99 @@ test('buildReport: mapping, plaatsing en "niet doen" worden gecontroleerd', () =
 
 // --- Search Console en de smart fallback ------------------------------------------------
 
-const PEM = '-----BEGIN PRIVATE KEY-----\nMIIEabc\nDEF==\n-----END PRIVATE KEY-----';
+// Een echte sleutel, alleen voor deze test: parsePrivateKey leest hem ook echt in.
+const { privateKey: PEM } = crypto.generateKeyPairSync('rsa', {
+  modulusLength: 2048,
+  privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+  publicKeyEncoding: { type: 'spki', format: 'pem' },
+});
+const SA_EMAIL = 'gsc-tool@project-123.iam.gserviceaccount.com';
+const ESCAPED = PEM.replace(/\n/g, '\\n');
+const ACCOUNT = { type: 'service_account', project_id: 'project-123', private_key_id: 'abc123def456', private_key: PEM, client_email: SA_EMAIL };
+const ACCOUNT_JSON = JSON.stringify(ACCOUNT, null, 2);
+/** Een stuk uit het midden van de sleutel: mag nooit in een melding of log staan. */
+const KEY_FRAGMENT = PEM.split('\n')[5];
 
-test('normalizePrivateKey: letterlijke \\n, echte regeleindes, CRLF en aanhalingstekens', () => {
-  const expected = PEM + '\n';
-  assert.equal(normalizePrivateKey(PEM.replace(/\n/g, '\\n')), expected);
-  assert.equal(normalizePrivateKey('"' + PEM.replace(/\n/g, '\\n') + '"'), expected);
-  assert.equal(normalizePrivateKey(PEM), expected);
-  assert.equal(normalizePrivateKey(PEM.replace(/\n/g, '\r\n')), expected);
-  assert.equal(normalizePrivateKey('geen sleutel'), null);
-  assert.equal(normalizePrivateKey('-----BEGIN PRIVATE KEY-----\nMIIE'), null); // afgekapt
+test('parsePrivateKey: elke gangbare plakvorm wordt weer dezelfde sleutel', () => {
+  const variants = {
+    'meerregelig': PEM,
+    'één regel met \\n, tussen aanhalingstekens': `"${ESCAPED}"`,
+    'één regel met \\n': ESCAPED,
+    'Windows-regeleindes': PEM.replace(/\n/g, '\r\n'),
+    'met komma uit de JSON-regel': `"${ESCAPED}",`,
+    'hele JSON-regel': `"private_key": "${ESCAPED}",`,
+    'hele JSON-bestand': ACCOUNT_JSON,
+    'regeleindes werden spaties': PEM.replace(/\n/g, ' '),
+    'dubbel geëscapete \\\\n': PEM.replace(/\n/g, '\\\\n'),
+    'zonder BEGIN- en END-regel': PEM.split('\n').filter((line) => line && !line.startsWith('-----')).join('\n'),
+    'met BOM ervoor': `\uFEFF${PEM}`,
+    'zonder regeleinde aan het eind': PEM.trim(),
+  };
+  for (const [label, value] of Object.entries(variants)) {
+    assert.equal(parsePrivateKey(value).key, PEM, label);
+  }
+  // Een oude PKCS#1-sleutel ("RSA PRIVATE KEY") blijft zoals hij is.
+  const pkcs1 = crypto.createPrivateKey(PEM).export({ type: 'pkcs1', format: 'pem' });
+  assert.equal(parsePrivateKey(pkcs1.replace(/\n/g, '\\n')).key, pkcs1);
+  assert.equal(normalizePrivateKey(ESCAPED), PEM);
 });
 
-test('readCredentials: niets ingesteld, half ingesteld en compleet', () => {
+test('parsePrivateKey: afgekapt, beschadigd of geen sleutel zegt precies wat er mis is', () => {
+  assert.match(parsePrivateKey(PEM.slice(0, -200)).problem, /afgekapt/);
+  const lines = PEM.split('\n');
+  assert.match(parsePrivateKey([...lines.slice(0, 4), ...lines.slice(9)].join('\n')).problem, /beschadigd/);
+  assert.match(parsePrivateKey('geen sleutel').problem, /geen private key/);
+  assert.match(parsePrivateKey('').problem, /bevat geen sleutel/);
+  assert.equal(normalizePrivateKey('geen sleutel'), null);
+});
+
+test('readCredentials: JSON-bestand, losse variabelen en het hele bestand in GOOGLE_PRIVATE_KEY', () => {
   assert.equal(readCredentials({}), null);
-  assert.deepEqual(readCredentials({ GOOGLE_CLIENT_EMAIL: 'x@y.iam.gserviceaccount.com' }), { invalid: true });
-  assert.deepEqual(readCredentials({ GOOGLE_CLIENT_EMAIL: 'x@y', GOOGLE_PRIVATE_KEY: PEM }), { email: 'x@y', key: PEM + '\n' });
+  const fromJson = { email: SA_EMAIL, key: PEM, keyId: 'abc123def456', from: 'GOOGLE_SERVICE_ACCOUNT_JSON' };
+  assert.deepEqual(readCredentials({ GOOGLE_SERVICE_ACCOUNT_JSON: ACCOUNT_JSON }), fromJson);
+  assert.deepEqual(readCredentials({ GOOGLE_SERVICE_ACCOUNT_JSON: Buffer.from(ACCOUNT_JSON).toString('base64') }), fromJson);
+  // Werden de \n in de sleutel onderweg echte regeleindes, dan is het geen geldige JSON meer; de velden wel.
+  assert.deepEqual(readCredentials({ GOOGLE_SERVICE_ACCOUNT_JSON: ACCOUNT_JSON.replace(/\\n/g, '\n') }), fromJson);
+  // Het JSON-bestand gaat voor de losse variabelen.
+  assert.deepEqual(readCredentials({ GOOGLE_SERVICE_ACCOUNT_JSON: ACCOUNT_JSON, GOOGLE_PRIVATE_KEY: 'kapot', GOOGLE_CLIENT_EMAIL: 'x' }), fromJson);
+
+  const separate = { email: SA_EMAIL, key: PEM, keyId: null, from: 'GOOGLE_CLIENT_EMAIL + GOOGLE_PRIVATE_KEY' };
+  assert.deepEqual(readCredentials({ GOOGLE_CLIENT_EMAIL: SA_EMAIL, GOOGLE_PRIVATE_KEY: PEM }), separate);
+  assert.deepEqual(readCredentials({ GOOGLE_CLIENT_EMAIL: ` "${SA_EMAIL}",`, GOOGLE_PRIVATE_KEY: `"${ESCAPED}",` }), separate);
+  assert.deepEqual(readCredentials({ GOOGLE_CLIENT_EMAIL: `"client_email": "${SA_EMAIL}",`, GOOGLE_PRIVATE_KEY: PEM }), separate);
+  // Het hele bestand in GOOGLE_PRIVATE_KEY: het adres uit dat bestand hoort bij de sleutel.
+  assert.deepEqual(readCredentials({ GOOGLE_CLIENT_EMAIL: 'ander@x.iam.gserviceaccount.com', GOOGLE_PRIVATE_KEY: ACCOUNT_JSON }),
+    { ...separate, keyId: 'abc123def456' });
+});
+
+test('readCredentials: half of verkeerd ingesteld geeft de reden, zonder de waarde te herhalen', () => {
+  const problem = (env) => readCredentials(env).problem;
+  assert.match(problem({ GOOGLE_CLIENT_EMAIL: SA_EMAIL }), /GOOGLE_PRIVATE_KEY bevat geen sleutel/);
+  assert.match(problem({ GOOGLE_PRIVATE_KEY: PEM }), /GOOGLE_CLIENT_EMAIL bevat geen adres/);
+  assert.match(problem({ GOOGLE_CLIENT_EMAIL: 'iemand@voorbeeld.nl', GOOGLE_PRIVATE_KEY: PEM }), /geen adres van een service account/);
+  assert.match(problem({ GOOGLE_CLIENT_EMAIL: PEM, GOOGLE_PRIVATE_KEY: SA_EMAIL }), /omgewisseld/);
+  assert.match(problem({ GOOGLE_CLIENT_EMAIL: SA_EMAIL, GOOGLE_PRIVATE_KEY: PEM.slice(0, -200) }), /afgekapt/);
+  assert.match(problem({ GOOGLE_SERVICE_ACCOUNT_JSON: JSON.stringify({ installed: { client_id: 'x' } }) }), /OAuth-client/);
+  assert.match(problem({ GOOGLE_SERVICE_ACCOUNT_JSON: 'hallo' }), /geen leesbaar sleutelbestand/);
+  assert.match(problem({ GOOGLE_SERVICE_ACCOUNT_JSON: ACCOUNT_JSON.slice(0, 900) }), /afgekapt/);
+  assert.match(problem({ GOOGLE_PRIVATE_KEY: ACCOUNT_JSON.slice(0, 900) }), /afgekapt/);
+  for (const env of [{ GOOGLE_CLIENT_EMAIL: PEM, GOOGLE_PRIVATE_KEY: SA_EMAIL }, { GOOGLE_CLIENT_EMAIL: SA_EMAIL, GOOGLE_PRIVATE_KEY: PEM.slice(0, -200) }]) {
+    assert.ok(!problem(env).includes(KEY_FRAGMENT));
+  }
+  // De log krijgt alleen de vorm van een waarde.
+  assert.ok(!describeValue(PEM).includes(KEY_FRAGMENT));
+  assert.match(describeValue(ESCAPED), /BEGIN ja, END ja/);
+  assert.equal(describeValue(''), 'leeg');
+});
+
+test('checkSearchConsole: zonder netwerk de instellingen, met de namen maar nooit de waarden', async () => {
+  const none = await checkSearchConsole({});
+  assert.equal(none.status, 'niet_ingesteld');
+  assert.deepEqual(none.variabelen, { GOOGLE_SERVICE_ACCOUNT_JSON: 'leeg', GOOGLE_CLIENT_EMAIL: 'leeg', GOOGLE_PRIVATE_KEY: 'leeg' });
+  const typo = await checkSearchConsole({ GOOGLE_CLIENT_EMAIL: SA_EMAIL, GSC_PRIVATE_KEY: PEM });
+  assert.equal(typo.status, 'sleutel_onvolledig');
+  assert.deepEqual(typo.andereVariabelen, ['GSC_PRIVATE_KEY']);
+  assert.ok(!JSON.stringify(typo).includes(KEY_FRAGMENT));
 });
 
 test('matchProperty: URL-prefix gaat voor domein, niet-geverifieerd telt niet', () => {
@@ -349,6 +428,15 @@ test('classifyGscError: 403 is geen toegang, API uit, sleutel, limiet, timeout',
   assert.equal(classifyGscError({ status: 403, message: 'Google Search Console API has not been used in project 1 before' }).status, 'api_uit');
   assert.equal(classifyGscError({ message: 'invalid_grant: Invalid JWT Signature.' }).status, 'sleutel_ongeldig');
   assert.equal(classifyGscError({ status: 401, message: 'x' }).status, 'sleutel_ongeldig');
+  // De reden van Google: een verwijderde sleutel, een onbekend account, of een onleesbare sleutel.
+  const deleted = classifyGscError({ message: 'invalid_grant: Invalid JWT Signature.' }, { email: SA_EMAIL });
+  assert.match(deleted.message, /verwijderd in Google Cloud/);
+  assert.match(deleted.message, /\/api\/status/);
+  const fromResponse = classifyGscError({ message: 'Request failed', response: { status: 400, data: { error: 'invalid_grant', error_description: 'Invalid JWT Signature.' } } });
+  assert.equal(fromResponse.status, 'sleutel_ongeldig');
+  assert.match(fromResponse.message, /verwijderd/);
+  assert.match(classifyGscError({ message: 'invalid_grant: Invalid grant: account not found' }, { email: SA_EMAIL }).message, /kent het service account .*niet/);
+  assert.equal(classifyGscError({ code: 'ERR_OSSL_UNSUPPORTED', message: 'error:1E08010C:DECODER routines::unsupported' }).status, 'sleutel_onvolledig');
   assert.equal(classifyGscError({ status: 429, message: 'x' }).status, 'limiet');
   assert.equal(classifyGscError({ code: 'GSC_TIMEOUT', message: 'timeout' }).status, 'timeout');
   assert.equal(classifyGscError({ status: 500, message: 'backend' }).status, 'fout');
@@ -363,7 +451,7 @@ test('toRow: CTR van fractie naar procent, afgerond', () => {
 test('fetchPageQueries: ook op een publieke deploy zonder APP_PASSWORD gewoon proberen', async () => {
   // Met een kapotte sleutel komt de aanroep tot aan de sleutelcontrole: er is geen wachtwoorddrempel meer.
   const result = await fetchPageQueries('https://www.x.nl/', { env: { VERCEL_ENV: 'production', GOOGLE_CLIENT_EMAIL: 'x@y', GOOGLE_PRIVATE_KEY: 'kapot' } });
-  assert.equal(result.status, 'sleutel_ongeldig');
+  assert.equal(result.status, 'sleutel_onvolledig');
   assert.equal(result.attempted, true);
 });
 
@@ -395,9 +483,10 @@ test('fetchPageQueries: zonder of met halve sleutel geen crash, wel een status',
   assert.equal(none.status, 'niet_ingesteld');
   assert.equal(none.error, false);
   assert.deepEqual(none.rows, []);
-  const half = await fetchPageQueries('https://www.x.nl/', { env: { GOOGLE_CLIENT_EMAIL: 'x@y', GOOGLE_PRIVATE_KEY: 'kapot' } });
-  assert.equal(half.status, 'sleutel_ongeldig');
+  const half = await fetchPageQueries('https://www.x.nl/', { env: { GOOGLE_CLIENT_EMAIL: SA_EMAIL, GOOGLE_PRIVATE_KEY: 'kapot' } });
+  assert.equal(half.status, 'sleutel_onvolledig');
   assert.equal(half.error, true);
+  assert.match(half.message, /GOOGLE_PRIVATE_KEY bevat geen private key.*\/api\/status/);
 });
 
 test('mergeKeywordLists: gemeten eerst, Ahrefs vult aan, bron per rij', () => {

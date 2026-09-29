@@ -443,13 +443,16 @@ const GSC_REASONS_SHORT = {
   geen_toegang: 'geen GSC-toegang',
   niet_ingesteld: 'GSC niet gekoppeld',
   leeg: 'geen GSC-vertoningen',
+  sleutel_onvolledig: 'GSC-sleutel onvolledig',
+  sleutel_ongeldig: 'GSC-sleutel geweigerd',
 };
 
 const GSC_REASONS = {
   geen_toegang: 'geen GSC-toegang voor dit domein',
   niet_ingesteld: 'Search Console niet gekoppeld',
   leeg: 'geen vertoningen in Search Console',
-  sleutel_ongeldig: 'de Google-sleutel werd geweigerd',
+  sleutel_onvolledig: 'de Google-sleutel is niet goed ingesteld',
+  sleutel_ongeldig: 'Google weigerde de sleutel',
   api_uit: 'de Search Console API staat uit',
   limiet: 'Search Console gaf een limiet',
   timeout: 'Search Console reageerde niet op tijd',

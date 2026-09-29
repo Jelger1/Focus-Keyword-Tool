@@ -48,6 +48,7 @@ Functions.
 | `app.js` | Frontend-flow: analyse, herfocus, automatische heranalyse, kopieerknoppen, markdown-export. Laadt als laatste. |
 | `api/analyze.js` | Verzamelen, intent check en bij een match de content gap. Dun: het echte werk zit in `lib/`. |
 | `api/refocus.js` | Scenario B: een beter zoekwoord zoeken. |
+| `api/status.js` | De instellingen controleren zonder analyse (GET): welke sleutels er staan, en of Search Console werkt voor een pagina. |
 | `lib/ahrefs.js` | Alle Ahrefs-calls. Velden, timeouts en foutmeldingen staan alleen hier. |
 | `lib/serp.js` | Provider-schakelaar (Ahrefs standaard, Serper terugval). Wisselen van provider = alleen dit bestand. |
 | `lib/page.js` | Pagina's ophalen en alleen de hoofdinhoud uitlezen (zonder menu, footer, cookiebalk of winkelwagen), voor doelpagina én concurrenten identiek. |
@@ -141,6 +142,13 @@ Regels:
   Vercel; `.gitignore` en `.vercelignore` weren JSON-sleutelbestanden in `api/`.
   Print nooit een omgevingsvariabele met een regel-filter: een meerregelige sleutel
   lekt dan vanaf de tweede regel. Lees sleutels alleen via `readCredentials()`.
+- **Een plakfout mag Search Console niet breken.** `readCredentials()` leest het hele
+  JSON-bestand (`GOOGLE_SERVICE_ACCOUNT_JSON`, gaat voor) of de losse variabelen, en
+  `parsePrivateKey()` herstelt elke gangbare plakvorm. Lukt dat niet, dan noemt de
+  melding de variabele en de oorzaak (`sleutel_onvolledig`); weigert Google een
+  geldige sleutel, dan de reden van Google (`sleutel_ongeldig`). Een melding of log
+  herhaalt nooit een ingestelde waarde, alleen namen en de vorm (`describeValue()`).
+  `/api/status` controleert de koppeling zonder analyse.
 - **Ahrefs-units zijn geld.** Vraag alleen de velden op die gebruikt worden
   (`select`), verrijk lijsten tot een vast maximum en cache niets in de browser
   wat de server opnieuw zou moeten ophalen.

@@ -23,6 +23,7 @@ Functions als back-end. Geen build-stap.
 | `app.js` | De flow in de browser: analyse, herfocus, automatische heranalyse en de markdown-export. |
 | `api/analyze.js` | Verzamelen, intent check en (bij een match) de content gap. |
 | `api/refocus.js` | Een beter zoekwoord zoeken: Search Console plus Ahrefs, of een zelf ingeladen export. |
+| `api/status.js` | De instellingen controleren zonder analyse: welke sleutels er staan en of Search Console werkt. |
 | `lib/ahrefs.js` | Alle Ahrefs-calls: SERP-overzicht, zoekwoordcijfers, zoekwoordideeën, rankende zoekwoorden per URL. |
 | `lib/serp.js` | Provider-schakelaar: Ahrefs (standaard) of Serper (terugval). |
 | `lib/page.js` | Pagina's ophalen en alleen de hoofdinhoud uitlezen (zonder menu, footer, cookiebalk of winkelwagen), voor doelpagina én concurrenten identiek. |
@@ -120,6 +121,8 @@ automatisch opnieuw uit.
    aanhalingstekens.
 3. Klik op **Deploy**. Wijzig je later een sleutel, doe dan **Deployments → Redeploy**:
    de functies lezen de variabelen bij het uitrollen in.
+4. Open `/api/status` op de nieuwe deploy: dat laat zien of alle sleutels er staan en
+   of Search Console werkt, zonder een analyse te draaien.
 
 Ontbreekt een sleutel, dan zegt de tool dat in de foutmelding, met de naam van de
 variabele erbij. De sleutels blijven op de server; de browser krijgt alleen JSON.
@@ -152,22 +155,38 @@ Staten), zodat de vertoningen bij dezelfde Google horen als de top 10.
 4. **Toegang per klant.** Voeg in Search Console bij elke klant-property het
    e-mailadres van het service account toe onder **Instellingen → Gebruikers en rechten**,
    met rechten **Beperkt**. Lezen is genoeg.
-5. **Omgevingsvariabelen.** Zet `client_email` in `GOOGLE_CLIENT_EMAIL` en
-   `private_key` in `GOOGLE_PRIVATE_KEY`:
-   - **In Vercel:** plak de sleutel zoals hij in het JSON-bestand staat tussen de
-     aanhalingstekens, dus met de letterlijke `\n`-tekens, of meerregelig. Geen
-     aanhalingstekens eromheen. Vink **Sensitive** aan, zodat de waarde na het
-     opslaan niet meer te lezen is.
-   - **In `.env.local`:** op één regel, tussen dubbele aanhalingstekens, met `\n`
-     op elke plek van een regeleinde:
-     ```
-     GOOGLE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBg...\n-----END PRIVATE KEY-----\n"
-     ```
-   De tool accepteert alle drie de vormen: letterlijke `\n`, echte regeleindes en
-   Windows-regeleindes.
-6. **Gelekt?** Is de sleutel ergens zichtbaar geweest (chat, screenshot, commit), maak
+5. **Omgevingsvariabelen.** Het makkelijkst: open het JSON-bestand, kopieer de hele
+   inhoud (van `{` tot en met `}`) en plak die in **`GOOGLE_SERVICE_ACCOUNT_JSON`**.
+   Adres en sleutel horen dan zeker bij elkaar. Vink in Vercel **Sensitive** aan.
+   Staat deze variabele er, dan tellen `GOOGLE_CLIENT_EMAIL` en `GOOGLE_PRIVATE_KEY`
+   niet meer.
+
+   Los kan ook: `client_email` in `GOOGLE_CLIENT_EMAIL` en `private_key` in
+   `GOOGLE_PRIVATE_KEY`. De tool herstelt de gangbare plakfouten zelf: aanhalingstekens
+   en een komma uit de JSON-regel, letterlijke of dubbele `\n`, Windows-regeleindes,
+   spaties waar regeleindes hoorden, een ontbrekende BEGIN- of END-regel, of het hele
+   bestand in `GOOGLE_PRIVATE_KEY`. Alleen een afgekapte sleutel is niet te redden.
+   In `.env.local` op één regel:
+   ```
+   GOOGLE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBg...\n-----END PRIVATE KEY-----\n"
+   ```
+6. **Redeploy en controleer.** Een gewijzigde variabele werkt pas na een nieuwe
+   deployment (**Deployments → ⋯ → Redeploy**). Open daarna
+   `/api/status?url=<een pagina van de klant>`. Dat kost geen Ahrefs-units of
+   Claude-tokens en laat zien:
+   - welke variabelen er staan (`variabelen`), en namen die op een tikfout lijken
+     (`andereVariabelen`);
+   - welk service account en welke sleutel gebruikt worden, of Google die sleutel nog
+     kent (`sleutel.actief`) en welke sleutels van het account nog actief zijn;
+   - of de pagina onder een property valt (`pagina.property`).
+
+   `searchConsole.status` is `ok` als de analyse Search Console gebruikt. Anders staat
+   in `searchConsole.message` precies wat er mis is. Een sleutel geeft de controle
+   nooit terug.
+7. **Gelekt?** Is de sleutel ergens zichtbaar geweest (chat, screenshot, commit), maak
    dan onder **IAM & Admin → Service Accounts → Keys** een nieuwe sleutel en verwijder
-   de oude. Zet de nieuwe waarde in `.env.local` en Vercel en doe een redeploy.
+   de oude. Zet de nieuwe waarde in `.env.local` en Vercel, doe een redeploy en kijk op
+   `/api/status` welke sleutels nog actief zijn: alleen de nieuwe hoort erbij.
 
 Elk antwoord van de API vertelt wat er gebruikt is:
 
@@ -179,7 +198,7 @@ Elk antwoord van de API vertelt wat er gebruikt is:
 | `source` | `gsc_upload` | De marketeer heeft zelf een export ingeladen. |
 | `source` | `serp_only` | Alleen de SERP van Serper: geen Ahrefs-sleutel en geen Search Console. |
 | `gsc_error` | `true` | Search Console werd geprobeerd en mislukte, bijvoorbeeld geen toegang. |
-| `gsc.status` | `ok`, `leeg`, `niet_ingesteld`, `geen_toegang`, `sleutel_ongeldig`, `api_uit`, `limiet`, `timeout`, `fout` | De precieze reden, met een Nederlandse uitleg in `gsc.message`. |
+| `gsc.status` | `ok`, `leeg`, `niet_ingesteld`, `geen_toegang`, `sleutel_onvolledig`, `sleutel_ongeldig`, `api_uit`, `limiet`, `timeout`, `fout` | De precieze reden, met een Nederlandse uitleg in `gsc.message`. `sleutel_onvolledig`: de ingestelde waarde is kapot of ontbreekt. `sleutel_ongeldig`: de waarde is in orde, maar Google weigert de sleutel. |
 
 ## Omgevingsvariabelen
 
@@ -190,8 +209,9 @@ onder **Settings → Environment Variables**.
 |---|---|---|
 | `ANTHROPIC_API_KEY` | ja | Intent check, herfocus en content gap. |
 | `AHREFS_API_KEY` | ja | SERP, zoekvolumes, zoekwoordideeën, rankende zoekwoorden per URL. |
-| `GOOGLE_CLIENT_EMAIL` | nee | E-mailadres van het service account, voor Search Console. |
-| `GOOGLE_PRIVATE_KEY` | nee | Private key van het service account. Zie hieronder voor het formaat. |
+| `GOOGLE_SERVICE_ACCOUNT_JSON` | nee | Het hele JSON-sleutelbestand van het service account, voor Search Console. Aanbevolen. |
+| `GOOGLE_CLIENT_EMAIL` | nee | Of los: het e-mailadres van het service account. |
+| `GOOGLE_PRIVATE_KEY` | nee | En de private key. Zie "Google Search Console koppelen" voor het formaat. |
 | `SERP_PROVIDER` | nee | `ahrefs` (standaard) of `serper`. |
 | `SERPER_API_KEY` | nee | Alleen bij `SERP_PROVIDER=serper`: de live top 10 zonder paginatypes. |
 | `APP_PASSWORD` | nee | Zet je die, dan vraagt de tool eenmalig om een wachtwoord. |
