@@ -20,10 +20,12 @@ Functions als back-end. Geen build-stap.
 | `fonts/` | Open Sans lokaal (OFL), zodat de pdf gewone TrueType-tekst bevat. |
 | `report.js` | De kaarten van het rapport, met de bron bij elk cijfer. |
 | `pdf.js` | "Download als pdf": bestandsnaam, kantlijnteksten en uitklapblokken bij het afdrukken. |
+| `chat.js` | De chat over het rapport in de browser: paneel, gesprek per rapport, versturen en opmaak. |
 | `app.js` | De flow in de browser: analyse, herfocus, automatische heranalyse en de markdown-export. |
 | `api/analyze.js` | Verzamelen, intent check en (bij een match) de content gap. |
 | `api/refocus.js` | Een beter zoekwoord zoeken: Search Console plus Ahrefs, of een zelf ingeladen export. |
 | `api/status.js` | De instellingen controleren zonder analyse: welke sleutels er staan en of Search Console werkt. |
+| `api/chat.js` | De chat: een vraag over een rapport, met de eerdere beurten als context. |
 | `lib/ahrefs.js` | Alle Ahrefs-calls: SERP-overzicht, zoekwoordcijfers, zoekwoordideeën, rankende zoekwoorden per URL. |
 | `lib/serp.js` | Provider-schakelaar: Ahrefs (standaard) of Serper (terugval). |
 | `lib/page.js` | Pagina's ophalen en alleen de hoofdinhoud uitlezen (zonder menu, footer, cookiebalk of winkelwagen), voor doelpagina én concurrenten identiek. |
@@ -31,6 +33,7 @@ Functions als back-end. Geen build-stap.
 | `lib/gap.js` | De content gap-instructie en het schema voor Claude. |
 | `lib/compare.js` | Termen tellen, vragen verzamelen, keyword mapping en elke bewering van Claude controleren. |
 | `lib/refocus.js` | De herfocus-instructie en de controle van de keuze. |
+| `lib/chat.js` | De chat: instructie, schema, controle van de invoer, het rapport als context en het nameten van voorgestelde teksten. |
 | `lib/gsc.js` | Search Console-exports lezen (CSV, TSV, JSON, Nederlandse en Engelse koppen). |
 | `lib/searchconsole.js` | Search Console API via een service account. Gooit nooit: geeft altijd een status terug. |
 | `lib/hybrid.js` | Search Console en Ahrefs samenvoegen, en de vlaggen `source` en `gsc_error`. |
@@ -95,6 +98,38 @@ kantlijn, dan staat onder "Meer instellingen" de optie "Kop- en voetteksten" aan
 
 Een analyse duurt één tot twee minuten en kost circa 25 cent aan Claude plus
 ongeveer 1.500 Ahrefs-units (herfocus: 500 tot 2.000 extra).
+
+## Chat over het rapport
+
+Staat er een rapport in beeld, dan opent "stel een vraag" (in de kaartkop of onder
+het rapport) een chat met Pure Minds AI. Vraag waarom de tool iets adviseert, geef
+kritiek of laat een tekst herschrijven. Op desktop staat de chat in de linkerkolom,
+naast het rapport; op een telefoon of tablet over de hele pagina.
+
+- **Alleen het rapport.** Claude krijgt het rapport en het gesprek, verder niets. Wat
+  er niet in staat (een ander zoekwoord, een ontbrekend cijfer), zegt de chat en vult
+  hij niet in. Een feit dat de marketeer zelf noemt (bijvoorbeeld een jaartal van de
+  klant) mag wel in een nieuwe tekst.
+- **Cijfers gecontroleerd.** Zoals in het rapport: een zin met een cijfer dat niet in
+  het rapport of in een vraag van de marketeer staat, haalt de code weg; onder het
+  antwoord staat hoeveel. Een voorgestelde tekst met zo'n cijfer valt helemaal weg.
+- **Teksten nagemeten.** Herschreven H1's, titles, meta descriptions en alinea's staan
+  als losse kaartjes met een kopieerknop. Het aantal tekens en of het focus zoekwoord
+  erin staat, meet de code, niet Claude.
+- **Per rapport.** Het gesprek blijft in de browser bewaard, ook na een refresh. Een
+  nieuwe analyse begint een nieuw gesprek; "nieuw gesprek" wist het zelf. Maximaal
+  twintig vragen per gesprek. De chat komt nooit in de pdf.
+
+De chat draait op Claude Opus 5.5. Het rapport gaat mee als context; de eerste vraag
+kost zo'n 10 tot 15 cent. Vraag je binnen vijf minuten door, dan leest Anthropic het
+rapport uit de cache en kost een vervolgvraag een paar cent. Na een langere pauze, of
+in een later hervat gesprek, wordt het rapport opnieuw ingelezen en kost de vraag weer
+zo'n 10 tot 15 cent. Een antwoord duurt meestal 15 tot 30 seconden.
+
+Komt er een herfocus bij het rapport, dan gaat die ook mee: de chat kan dan uitleggen
+waarom de tool een kandidaat koos of afwees. Op Vercel stopt een vraag die de marketeer
+afbreekt ook echt (`supportsCancellation` in `vercel.json`), zodat niemand betaalt voor
+een antwoord dat niemand leest.
 
 ## Lokaal draaien
 

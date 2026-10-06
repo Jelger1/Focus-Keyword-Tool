@@ -30,6 +30,10 @@ De output is een dashboard van kaarten, kopieerbaar per suggestie én in één k
 als markdown, en te downloaden als pdf voor de klant, in de opbouw van onze focus
 keyword-documenten.
 
+Na het rapport kan de marketeer **chatten met Pure Minds AI**: vragen waarom de tool
+iets adviseert, kritiek geven en teksten laten herschrijven. De chat kent alleen het
+rapport en het gesprek, en hoort niet bij de pdf.
+
 ---
 
 ## Architectuur
@@ -45,10 +49,12 @@ Functions.
 | `fonts/` | Open Sans als statische woff2 (OFL). Het variabele font van Google Fonts komt in een pdf als Type3 terecht; deze als TrueType. |
 | `report.js` | Het rapport: alle kaarten in de opbouw van onze focus keyword-documenten, met de bron bij elk cijfer. |
 | `pdf.js` | Het moment van afdrukken: bestandsnaam, kantlijnteksten, uitklapblokken open, eenmalige uitleg bij "download als pdf". |
+| `chat.js` | De chat over het rapport: op desktop in de linkerkolom naast het rapport, kleiner als scherm over de pagina; één gesprek per rapport in de browser, `sendChatMessage()`, opmaak van antwoorden zonder HTML. |
 | `app.js` | Frontend-flow: analyse, herfocus, automatische heranalyse, kopieerknoppen, markdown-export. Laadt als laatste. |
 | `api/analyze.js` | Verzamelen, intent check en bij een match de content gap. Dun: het echte werk zit in `lib/`. |
 | `api/refocus.js` | Scenario B: een beter zoekwoord zoeken. |
 | `api/status.js` | De instellingen controleren zonder analyse (GET): welke sleutels er staan, en of Search Console werkt voor een pagina. |
+| `api/chat.js` | De chat: één vraag over een rapport, met de eerdere beurten. Dun: het werk zit in `lib/chat.js`. |
 | `lib/ahrefs.js` | Alle Ahrefs-calls. Velden, timeouts en foutmeldingen staan alleen hier. |
 | `lib/serp.js` | Provider-schakelaar (Ahrefs standaard, Serper terugval). Wisselen van provider = alleen dit bestand. |
 | `lib/page.js` | Pagina's ophalen en alleen de hoofdinhoud uitlezen (zonder menu, footer, cookiebalk of winkelwagen), voor doelpagina én concurrenten identiek. |
@@ -56,11 +62,12 @@ Functions.
 | `lib/gap.js` | Instructie en schema van de content gap-call. |
 | `lib/compare.js` | Termen tellen, vragen verzamelen, mapping-kandidaten, en elke bewering van Claude controleren (`buildReport`). |
 | `lib/refocus.js` | Instructie, schema en controle van de herfocus. |
+| `lib/chat.js` | Instructie, schema en controle van de chat: wat de browser meestuurt, het rapport als context, het gesprek voor de Messages API, en het nameten van voorgestelde teksten. |
 | `lib/gsc.js` | Search Console-exports lezen. |
 | `lib/searchconsole.js` | Search Console API via een service account. Gooit nooit; geeft altijd een status. |
 | `lib/hybrid.js` | Search Console en Ahrefs samenvoegen, bron per zoekwoordrij, de vlaggen `source` en `gsc_error`. |
 | `lib/keywordsources.js` | De zoekwoordlijst voor de herfocus: export, of Search Console plus Ahrefs met terugval. |
-| `lib/claude.js` | De gedeelde Claude-aanroep (model, schema-output, server-side terugval). |
+| `lib/claude.js` | De gedeelde Claude-aanroep (model, schema-output, server-side terugval); `converseWithClaude()` voor de chat, op `CHAT_MODEL`. |
 | `lib/facts.js` | De feitenregels voor elke prompt, en de controle dat elk cijfer van Claude in het meegestuurde bericht staat. |
 | `lib/auth.js` | Het optionele wachtwoord, in constante tijd vergeleken. |
 | `lib/region.js` | Regio en taal (NL, US): Ahrefs-country, Serper gl/hl, Accept-Language, Search Console-land, taalinstructie voor Claude. |
@@ -106,6 +113,11 @@ Regels:
     meting zegt dat het zoekwoord ontbreekt; `buildReport()` gooit de rest weg;
   - herfocus: een keuze moet letterlijk in de lijst staan; een AI-voorstel telt pas
     als Ahrefs er zoekvolume voor kent;
+  - chat: Claude krijgt alleen het rapport en het gesprek; per regel verdwijnen de
+    zinnen met een cijfer dat niet in het rapport of in een vraag van de marketeer
+    staat (`groundChat()`), en een voorgestelde tekst met zo'n cijfer helemaal.
+    Lengte en zoekwoord van elk voorstel meet de code (`measureChatText()`), nooit
+    Claude;
   - cijfers, bij elke call: elke systeemprompt bevat `FACT_RULES` (alleen cijfers
     uit het bericht, niets uitrekenen, ontbrekend is ontbrekend, geen kennis van
     buiten het bericht), en `lib/facts.js` legt daarna elk getal in de tekst van
@@ -114,6 +126,18 @@ Regels:
     getal verdwijnt helemaal. Het rapport meldt hoeveel er weg is (`factCheck`).
     Een nieuwe Claude-call krijgt dezelfde twee lagen.
   Houd die scheiding intact.
+- **De chat bewaart niets op de server.** De browser stuurt bij elke vraag het
+  rapport en de afgeronde beurten mee; `readChatRequest()` controleert alles en
+  weigert liever dan dat hij stil iets weglaat. Eerdere antwoorden gaan als tekst
+  terug, zonder thinking-blokken: die zijn gebonden aan het gesprek waarin ze
+  ontstonden. Het rapport staat als eigen blok met een cachepunt voor de eerste
+  vraag, dus `buildChatContext()` moet voor hetzelfde rapport altijd dezelfde tekst
+  geven (geen datum van nu, geen willekeurige volgorde), anders mist de cache. De
+  herfocus die bij het rapport hoort gaat mee als eigen `<herfocus>`-blok. Grenzen
+  in `CHAT_LIMITS` tellen in bytes, en wat de server teruggeeft accepteert hij later
+  altijd als geschiedenis. `vercel.json` zet `supportsCancellation` aan voor
+  `api/chat.js`, zodat een afgebroken vraag de Claude-aanroep ook echt stopt. De
+  chat staat in de kolom `.no-print` en komt nooit in de pdf.
 - **Alleen de hoofdinhoud telt.** `readPage()` in `lib/page.js` leest pagina's met
   `node-html-parser` en gooit sitechrome weg voordat er iets geteld wordt: menu,
   header en footer van de site, cookiebalken, winkelwagen, inloggen, kleine

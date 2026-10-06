@@ -321,7 +321,8 @@ function reportCards(report, options = {}) {
   } else {
     cards.push(refocusCard(report, options));
   }
-  cards.push(bronnenCard(report), reportEnd(report));
+  // Doorvragen (chat.js) en delen: alleen op het scherm, niet in de pdf.
+  cards.push(bronnenCard(report), chatEnd(report), reportEnd(report));
   return cards;
 }
 

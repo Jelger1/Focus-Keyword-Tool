@@ -58,7 +58,7 @@
 
     <!-- Invoer -->
     <!-- Op desktop staat de pagina op schermhoogte; de kolom scrolt zelf als het formulier niet past -->
-    <section class="scroll-column no-print min-w-0 lg:col-span-2 lg:min-h-0 lg:overflow-y-auto lg:pr-2">
+    <section id="input-column" class="scroll-column no-print min-w-0 lg:col-span-2 lg:min-h-0 lg:overflow-y-auto lg:pr-2">
       <form id="analyze-form" class="card border-t-[3px] border-t-pm-cyan p-5 sm:p-6 flex flex-col gap-5">
         <div class="sm:hidden">
           <h1 class="text-base font-bold leading-tight">Keyword Focus &amp; Intent Check</h1>
@@ -142,6 +142,44 @@
           </ol>
         </div>
       </form>
+
+      <!--
+        Chat over het rapport (chat.js). Op desktop neemt hij de plek van het formulier
+        in, naast het rapport; op een telefoon of tablet is hij een scherm over de hele
+        pagina. Te openen zodra er een rapport in beeld is; nooit in de pdf.
+      -->
+      <aside id="chat-panel" class="chat-panel card" hidden aria-labelledby="chat-title">
+        <div class="chat-head">
+          <div class="chat-head-text">
+            <p class="eyebrow">pure minds ai</p>
+            <h2 id="chat-title" class="chat-title">Chat over dit rapport<span class="text-pm-cyan">.</span></h2>
+            <p id="chat-subject" class="chat-subject"></p>
+          </div>
+          <div class="chat-head-actions">
+            <button type="button" id="chat-reset" class="btn btn-quiet btn-xs">nieuw gesprek</button>
+            <button type="button" id="chat-close" class="btn btn-quiet btn-icon" aria-label="sluit de chat" title="sluit de chat">
+              <svg class="h-4 w-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" aria-hidden="true"><path d="M5.5 5.5l9 9m0-9-9 9"/></svg>
+            </button>
+          </div>
+        </div>
+        <div id="chat-log" class="chat-log" role="log" aria-live="polite" aria-relevant="additions" aria-label="Gesprek over het rapport" tabindex="0"></div>
+        <form id="chat-form" class="chat-composer" novalidate>
+          <label for="chat-input" class="sr-only">Je vraag over dit rapport</label>
+          <textarea id="chat-input" class="input chat-input" rows="1" maxlength="4000" autocomplete="off" spellcheck="true"
+            placeholder="Stel een vraag over dit rapport…" aria-describedby="chat-hint"></textarea>
+          <div class="chat-composer-foot">
+            <p id="chat-hint" class="chat-hint" aria-live="polite">Enter verstuurt · Shift+Enter voor een nieuwe regel</p>
+            <span id="chat-count" class="chat-count" aria-hidden="true"></span>
+            <button type="submit" id="chat-send" class="btn btn-primary btn-sm">
+              <svg id="chat-spinner" class="hidden h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+              </svg>
+              <span id="chat-send-label">verstuur</span>
+            </button>
+          </div>
+        </form>
+      </aside>
     </section>
 
     <!-- Resultaten -->
@@ -272,9 +310,10 @@
     </div>
   </template>
 
-  <!-- report.js en pdf.js eerst: app.js tekent bij het laden meteen het vorige rapport. -->
+  <!-- report.js, pdf.js en chat.js eerst: app.js tekent bij het laden meteen het vorige rapport. -->
   <script src="report.js"></script>
   <script src="pdf.js"></script>
+  <script src="chat.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

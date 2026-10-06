@@ -6,6 +6,10 @@
     },
     "api/refocus.js": {
       "maxDuration": 120
+    },
+    "api/chat.js": {
+      "maxDuration": 300,
+      "supportsCancellation": true
     }
   }
 }

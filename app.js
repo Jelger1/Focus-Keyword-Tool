@@ -796,11 +796,14 @@ function renderReport(report, options = {}) {
   output.dataset.stage = report.stage;
   output.replaceChildren(...reportCards(report, options));
   actions.replaceChildren(
+    chatButton(),
     copyButton(() => toMarkdown(report), 'kopieer markdown', 'btn btn-quiet btn-sm relative'),
     pdfButton(report)
   );
   setPrintContext(report);
   setSourceBadge(report);
+  // De chat (chat.js) gaat vanaf nu over dit rapport.
+  attachChat(report);
   if (report.page?.url) showRecheck(report.page.url, report.keyword, regionOf(report));
 
   // Tijdens de herfocus loopt er nog een aanvraag: voortgangsbalk en stappen
@@ -1438,6 +1441,7 @@ function showEmpty() {
   output.className = '';
   delete output.dataset.stage;
   clearPrintContext();
+  detachChat({ close: true });
   output.innerHTML = EMPTY_STATE;
   actions.replaceChildren();
   progressBar.classList.add('hidden');
@@ -1459,6 +1463,7 @@ function showSkeleton(panel) {
   output.className = 'space-y-4';
   delete output.dataset.stage;
   clearPrintContext();
+  detachChat();
   output.replaceChildren(...(panel ? [panel.node] : []), skeletonNode());
   actions.replaceChildren();
   progressBar.classList.remove('hidden');
@@ -1511,6 +1516,7 @@ function renderError(error) {
   output.className = '';
   delete output.dataset.stage;
   clearPrintContext();
+  detachChat();
   const box = errorBox(error);
   box.classList.add('mx-auto', 'max-w-2xl');
 
@@ -1547,6 +1553,7 @@ function isDesktop() {
 
 function setLoading(loading, label = 'bezig met analyseren') {
   isLoading = loading;
+  pauseChat(loading);
   submitBtn.disabled = loading;
   resetBtn.disabled = loading;
   submitSpinner.classList.toggle('hidden', !loading);
@@ -1648,6 +1655,7 @@ resetBtn.addEventListener('click', (event) => {
   storageRemove(STORAGE.refocus);
   storageRemove(STORAGE.gsc);
   lastGscText = '';
+  forgetChat();
   showEmpty();
   // Het native reset-event leegt de velden pas na deze handler; daarna ook de regio gelijktrekken.
   setTimeout(() => {
