@@ -89,7 +89,9 @@ Regels:
   Vraagt de client `Accept: application/x-ndjson`, dan komt hetzelfde antwoord als
   laatste regel van een stroom, na één regel per fase (`lib/progress.js`). Meld
   alleen echte fasen: geen geschatte percentages. Roep `progress.throwIfGone()`
-  aan vóór elke dure stap.
+  aan vóór elke dure stap. Op Vercel merkt een functie alleen dat de browser weg is
+  als `vercel.json` `supportsCancellation` aanzet voor dat pad; een nieuw endpoint
+  met dure stappen krijgt die instelling ook.
 - **De pdf is het rapport zelf.** Geen html2pdf of jsPDF: `print.css` maakt van
   dezelfde kaarten een A4-document, en de marketeer kiest "Opslaan als PDF". Zo blijft
   de tekst selecteerbaar en staat meting naast schatting precies zoals op het scherm.
