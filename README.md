@@ -96,7 +96,7 @@ kopregel werken in Chrome en Edge; Firefox en Safari laten die weg (logo, zoekwo
 en datum staan dan nog op pagina 1). Ziet iemand toch een datum of URL in de
 kantlijn, dan staat onder "Meer instellingen" de optie "Kop- en voetteksten" aan.
 
-Een analyse duurt één tot twee minuten en kost circa 25 cent aan Claude plus
+Een analyse duurt één tot twee minuten en kost zo'n 25 tot 35 cent aan Claude (Opus 5.5) plus
 ongeveer 1.500 Ahrefs-units (herfocus: 500 tot 2.000 extra).
 
 ## Chat over het rapport
@@ -120,7 +120,7 @@ naast het rapport; op een telefoon of tablet over de hele pagina.
   nieuwe analyse begint een nieuw gesprek; "nieuw gesprek" wist het zelf. Maximaal
   twintig vragen per gesprek. De chat komt nooit in de pdf.
 
-De chat draait op Claude Opus 5.5. Het rapport gaat mee als context; de eerste vraag
+De chat draait, net als de analyse, op Claude Opus 5.5. Het rapport gaat mee als context; de eerste vraag
 kost zo'n 10 tot 15 cent. Vraag je binnen vijf minuten door, dan leest Anthropic het
 rapport uit de cache en kost een vervolgvraag een paar cent. Na een langere pauze, of
 in een later hervat gesprek, wordt het rapport opnieuw ingelezen en kost de vraag weer

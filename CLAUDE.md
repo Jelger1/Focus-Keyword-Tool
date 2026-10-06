@@ -67,7 +67,7 @@ Functions.
 | `lib/searchconsole.js` | Search Console API via een service account. Gooit nooit; geeft altijd een status. |
 | `lib/hybrid.js` | Search Console en Ahrefs samenvoegen, bron per zoekwoordrij, de vlaggen `source` en `gsc_error`. |
 | `lib/keywordsources.js` | De zoekwoordlijst voor de herfocus: export, of Search Console plus Ahrefs met terugval. |
-| `lib/claude.js` | De gedeelde Claude-aanroep (model, schema-output, server-side terugval); `converseWithClaude()` voor de chat, op `CHAT_MODEL`. |
+| `lib/claude.js` | De gedeelde Claude-aanroep (model, schema-output, server-side terugval); alle calls op Claude Opus 5.5 (`MODEL`), `converseWithClaude()` voor de chat. |
 | `lib/facts.js` | De feitenregels voor elke prompt, en de controle dat elk cijfer van Claude in het meegestuurde bericht staat. |
 | `lib/auth.js` | Het optionele wachtwoord, in constante tijd vergeleken. |
 | `lib/region.js` | Regio en taal (NL, US): Ahrefs-country, Serper gl/hl, Accept-Language, Search Console-land, taalinstructie voor Claude. |

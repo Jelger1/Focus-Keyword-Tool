@@ -156,7 +156,8 @@ export default async function handler(req, res) {
       system: REFOCUS_SYSTEM_PROMPT,
       schema: REFOCUS_SCHEMA,
       message: refocusMessage,
-      maxTokens: 4_000,
+      // Ruimte voor het nadenken van Opus 5.5 plus de keuze; ongebruikte tokens kosten niets.
+      maxTokens: 8_000,
       effort: 'medium',
     });
     // Eerst de cijfers in de uitleg, daarna de keuze tegen de lijst.

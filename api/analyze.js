@@ -187,7 +187,8 @@ export default async function handler(req, res) {
       system: INTENT_SYSTEM_PROMPT,
       schema: INTENT_SCHEMA,
       message: intentMessage,
-      maxTokens: 4_000,
+      // Ruimte voor het nadenken van Opus 5.5 plus het oordeel; ongebruikte tokens kosten niets.
+      maxTokens: 8_000,
       effort: 'medium',
     });
     // Eerst de cijfers: een getal dat niet in het bericht stond, haalt het rapport niet.
@@ -261,7 +262,7 @@ export default async function handler(req, res) {
         system: GAP_TERMS_SYSTEM_PROMPT,
         schema: GAP_TERMS_SCHEMA,
         message: termsMessage,
-        maxTokens: 8_000,
+        maxTokens: 12_000,
         effort: 'medium',
       }),
     ]);
@@ -294,6 +295,9 @@ export default async function handler(req, res) {
       dekking: report.coverage.score,
       input_tokens: usage.reduce((sum, item) => sum + (item.input_tokens || 0), 0),
       output_tokens: usage.reduce((sum, item) => sum + (item.output_tokens || 0), 0),
+      // Per call (intent, onderwerpen, termen), naast max_tokens 8k/16k/12k: zo zie je
+      // in de log of een call de grens nadert, voordat hij wordt afgekapt.
+      output_per_call: usage.map((item) => item.output_tokens ?? null),
     });
 
     const finalFlags = sourceFlags(gsc, { ahrefsUsed: ahrefsInIntent || (ideas.value || []).length > 0 });
